@@ -1,0 +1,24 @@
+{
+  "name": "seedbox",
+  "version": "1.0.0",
+  "description": "Self-hosted cloud torrent client with in-browser streaming",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.2.1",
+    "webtorrent": "^2.8.5"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "overrides": {
+    "uint8-util": "2.2.6"
+  }
+}

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seedbox</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#262a33; --text:#e6e8ec; --muted:#8a90a0; --accent:#4f8cff; --ok:#3ecf8e; --bad:#ff5d5d; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:900px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:22px; margin:0 0 16px; }
+  form { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
+  input[type=text] { flex:1; min-width:0; padding:12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+  button, label.btn { padding:10px 14px; border-radius:8px; border:0; background:var(--accent); color:#fff; cursor:pointer; font:inherit; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--text); padding:6px 10px; }
+  button.danger { color:var(--bad); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px; }
+  .row { display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap; }
+  .name { font-weight:600; word-break:break-word; }
+  .meta { color:var(--muted); font-size:13px; }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin:10px 0; }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+  .done .bar > i { background:var(--ok); }
+  ul { list-style:none; padding:0; margin:8px 0 0; }
+  li { display:flex; justify-content:space-between; gap:8px; padding:6px 0; border-top:1px solid var(--line); font-size:14px; align-items:center; }
+  li span { word-break:break-all; }
+  li a { color:var(--accent); text-decoration:none; margin-left:10px; white-space:nowrap; }
+  dialog { width:min(100%, 1100px); padding:0; border:0; background:#000; }
+  dialog::backdrop { background:rgba(0,0,0,.8); }
+  video { width:100%; max-height:85vh; display:block; }
+  .empty { color:var(--muted); text-align:center; padding:40px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Seedbox</h1>
+  <form id="add">
+    <input type="text" id="magnet" placeholder="Paste a magnet link…" autocomplete="off">
+    <button>Add</button>
+    <label class="btn">.torrent file<input type="file" id="file" accept=".torrent" hidden></label>
+  </form>
+  <div id="list"></div>
+</main>
+<dialog id="player"><video id="video" controls autoplay></video></dialog>
+<script>
+const $ = s => document.querySelector(s)
+const fmt = b => { if (!b) return '0 B'; const u=['B','KB','MB','GB','TB']; const i=Math.min(4,Math.floor(Math.log(b)/Math.log(1024))); return (b/1024**i).toFixed(i?1:0)+' '+u[i] }
+const eta = ms => !isFinite(ms) || ms <= 0 ? '' : ms > 3.6e6 ? Math.round(ms/3.6e6)+'h' : ms > 6e4 ? Math.round(ms/6e4)+'m' : Math.round(ms/1e3)+'s'
+const playable = n => /\.(mp4|m4v|webm|mov|mp3|m4a|flac|ogg|wav|mkv)$/i.test(n)
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+
+async function refresh () {
+  const list = await fetch('/api/torrents').then(r => r.json()).catch(() => null)
+  if (!list) return
+  $('#list').innerHTML = list.length ? list.map(t => `
+    <div class="card ${t.done ? 'done' : ''}">
+      <div class="row">
+        <div class="name">${esc(t.name)}</div>
+        <div>
+          <button class="ghost" onclick="act('${t.infoHash}','${t.paused ? 'resume' : 'pause'}')">${t.paused ? 'Resume' : 'Pause'}</button>
+          <button class="ghost danger" onclick="del('${t.infoHash}')">Remove</button>
+        </div>
+      </div>
+      <div class="bar"><i style="width:${(t.progress*100).toFixed(1)}%"></i></div>
+      <div class="meta">${(t.progress*100).toFixed(1)}% · ${fmt(t.downloaded)} / ${fmt(t.length)} · ↓ ${fmt(t.downloadSpeed)}/s · ↑ ${fmt(t.uploadSpeed)}/s · ${t.peers} peers ${t.done ? '· Complete' : eta(t.timeRemaining) ? '· ' + eta(t.timeRemaining) + ' left' : ''}</div>
+      <ul>${t.files.map(f => `
+        <li><span>${esc(f.path)} <span class="meta">(${fmt(f.length)}, ${(f.progress*100).toFixed(0)}%)</span></span>
+          <span>${playable(f.name) ? `<a href="#" onclick="play('/files/${t.infoHash}/${f.index}');return false">▶ Play</a>` : ''}
+          <a href="/files/${t.infoHash}/${f.index}?download=1">⬇ Download</a></span></li>`).join('')}
+      </ul>
+    </div>`).join('') : '<div class="empty">No torrents yet. Paste a magnet link above.</div>'
+}
+
+async function add (body, url = '/api/torrents', headers = { 'Content-Type': 'application/json' }) {
+  const r = await fetch(url, { method: 'POST', headers, body })
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || 'Failed to add')
+  refresh()
+}
+$('#add').onsubmit = e => { e.preventDefault(); const m = $('#magnet').value.trim(); if (m) { add(JSON.stringify({ magnet: m })); $('#magnet').value = '' } }
+$('#file').onchange = e => { const f = e.target.files[0]; if (f) add(f, '/api/torrents/file', { 'Content-Type': 'application/x-bittorrent' }); e.target.value = '' }
+async function act (h, a) { await fetch(`/api/torrents/${h}/${a}`, { method: 'POST' }); refresh() }
+async function del (h) {
+  if (!confirm('Remove this torrent?')) return
+  const files = confirm('Also delete downloaded files from the server?') ? '1' : '0'
+  await fetch(`/api/torrents/${h}?files=${files}`, { method: 'DELETE' }); refresh()
+}
+function play (src) { $('#video').src = src; $('#player').showModal() }
+$('#player').onclick = e => { if (e.target.id === 'player') { $('#video').pause(); $('#video').removeAttribute('src'); $('#player').close() } }
+
+refresh(); setInterval(refresh, 2000)
+</script>
+</body>
+</html>
