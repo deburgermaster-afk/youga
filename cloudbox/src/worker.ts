@@ -21,6 +21,8 @@ type Job = {
   remoteState?: string
   urlExpires?: number
   children?: number
+  remoteStats?: { down: number; up: number; seeds: number; peers: number; eta: number; ratio: number }
+  startedAt?: number
   url: string
   name: string
   key: string
@@ -288,12 +290,13 @@ async function step(env: Env, id: string, maxParts: number): Promise<boolean> {
     if (job.kind === 'magnet') {
       const { torboxKey } = await getConfig(env)
       if (!torboxKey) throw new Error('TorBox key missing. Add it in Settings.')
-      const t = await torbox<{ name: string; size: number; progress: number; download_state: string; download_finished: boolean; download_present: boolean; files?: { id: number; name: string; size: number }[] }>(
+      const t = await torbox<{ name: string; size: number; progress: number; download_state: string; download_finished: boolean; download_present: boolean; download_speed?: number; upload_speed?: number; seeds?: number; peers?: number; eta?: number; ratio?: number; files?: { id: number; name: string; size: number }[] }>(
         torboxKey, `/torrents/mylist?id=${job.torbox!.torrentId}&bypass_cache=true`)
       job.name = t.name || job.name
       job.size = t.size || job.size
       job.remoteProgress = t.progress ?? 0
       job.remoteState = t.download_state
+      job.remoteStats = { down: t.download_speed || 0, up: t.upload_speed || 0, seeds: t.seeds || 0, peers: t.peers || 0, eta: t.eta || 0, ratio: t.ratio || 0 }
       if (/error|failed/i.test(t.download_state || '')) throw new Error(`TorBox: ${t.download_state}`)
       if ((t.download_finished || t.download_present) && t.files?.length) {
         await spawnCopies(env, job, t.files)
@@ -306,6 +309,7 @@ async function step(env: Env, id: string, maxParts: number): Promise<boolean> {
       return true
     }
     await resolveUrl(env, job)
+    job.startedAt ||= Date.now()
     if (!job.ranges) {
       const t0 = Date.now()
       const res = await fetch(job.url)

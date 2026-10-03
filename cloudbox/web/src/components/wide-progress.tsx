@@ -1,16 +1,18 @@
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
 
-// Thick progress bar with its label drawn inside. mix-blend-difference keeps
-// the text crisp: white over the empty track, black over the filled part.
+// Thick progress bar with its label drawn inside. In "mono" tone,
+// mix-blend-difference keeps the text crisp over both halves; "blue" uses
+// plain white text, which reads well on blue and on the dark track.
 export function WideProgress({
-  value, left, right, muted = false, size = 'lg', className,
+  value, left, right, muted = false, size = 'lg', tone = 'mono', className,
 }: {
   value: number
   left?: React.ReactNode
   right?: React.ReactNode
   muted?: boolean
   size?: 'lg' | 'md' | 'sm'
+  tone?: 'mono' | 'blue'
   className?: string
 }) {
   return (
@@ -22,12 +24,14 @@ export function WideProgress({
           size === 'lg' && 'h-10 rounded-md',
           size === 'md' && 'h-7 rounded-md',
           size === 'sm' && 'h-5 rounded',
+          tone === 'blue' && '[&_[data-slot=progress-indicator]]:bg-blue-500',
           muted && '[&_[data-slot=progress-indicator]]:bg-neutral-500',
         )}
       />
       {(left || right) && (
         <div className={cn(
-          'pointer-events-none absolute inset-0 flex items-center justify-between gap-3 font-mono font-semibold tabular-nums text-white mix-blend-difference',
+          'pointer-events-none absolute inset-0 flex items-center justify-between gap-3 font-mono font-semibold tabular-nums text-white',
+          tone === 'mono' && 'mix-blend-difference',
           size === 'sm' ? 'px-2 text-[11px]' : 'px-3 text-xs sm:text-sm',
         )}>
           <span className="shrink-0">{left}</span>

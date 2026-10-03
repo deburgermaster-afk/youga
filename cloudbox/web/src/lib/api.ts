@@ -10,6 +10,8 @@ export type Job = {
   remoteProgress?: number
   remoteState?: string
   children?: number
+  remoteStats?: { down: number; up: number; seeds: number; peers: number; eta: number; ratio: number }
+  startedAt?: number
   error?: string
   bps?: number
   createdAt: number

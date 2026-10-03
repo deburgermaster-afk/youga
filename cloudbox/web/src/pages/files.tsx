@@ -3,7 +3,6 @@ import { toast } from 'sonner'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Badge } from '@/components/ui/badge'
 import {
   Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
@@ -11,10 +10,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
-import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item'
+import { Item, ItemActions, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
-import { FileMenu } from '@/components/file-menu'
-import { api, bytes, ext, type Entry } from '@/lib/api'
+import { FileRow } from '@/components/file-row'
+import { api, bytes, type Entry } from '@/lib/api'
 
 export function FilesPage() {
   const [path, setPath] = useState('')
@@ -107,18 +106,7 @@ export function FilesPage() {
             </ItemActions>
           </Item>
         ) : (
-          <Item key={e.path} variant="outline" className="animate-in fade-in-0 duration-200">
-            <ItemContent className="min-w-0 basis-full sm:basis-0">
-              <ItemTitle className="break-all">{e.name}</ItemTitle>
-              <ItemDescription className="flex items-center gap-2 font-mono text-xs tabular-nums">
-                <Badge variant="outline" className="font-mono">{ext(e.name)}</Badge>
-                {bytes(e.size)} · {new Date(e.mtime).toLocaleDateString()}
-              </ItemDescription>
-            </ItemContent>
-            <ItemActions className="ml-auto">
-              <FileMenu url={e.url!} name={e.name} onDelete={() => setDel(e)} />
-            </ItemActions>
-          </Item>
+          <FileRow key={e.path} f={e} onDelete={() => setDel(e)} />
         ))}
       </ItemGroup>
 

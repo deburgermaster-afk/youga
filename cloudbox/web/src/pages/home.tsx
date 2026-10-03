@@ -1,18 +1,14 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
+import { Pause, Play, RotateCw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { WideProgress } from '@/components/wide-progress'
-import { api, bytes, duration, isImage, isMedia, isVideo, speed, type Entry, type Job } from '@/lib/api'
-import { absolute, copy, openInApp, platform, preferredPlayer } from '@/lib/links'
-import { useApp } from '@/lib/app-context'
+import { FileRow } from '@/components/file-row'
+import { api, bytes, duration, speed, type Entry, type Job } from '@/lib/api'
 
 const isLink = (s: string) => /^https?:\/\/\S+$/i.test(s) || /^magnet:\?\S+$/i.test(s) || /^[a-f0-9]{40}$/i.test(s)
 
@@ -70,64 +66,90 @@ function PasteBox({ onAdded }: { onAdded: () => void }) {
   )
 }
 
-function JobRow({ job, onChange }: { job: Job; onChange: () => void }) {
-  const remote = job.status === 'remote' || (job.kind === 'magnet' && job.status !== 'done')
-  const pct = remote ? (job.remoteProgress ?? 0) * 100 : job.size > 0 ? (job.copied / job.size) * 100 : 0
-  const left = job.bps && job.size > 0 ? ((job.size - job.copied) / job.bps) * 1000 : null
-  const act = async (fn: () => Promise<unknown>, msg?: string) => {
-    try { await fn(); if (msg) toast(msg); onChange() } catch (e) { toast.error((e as Error).message) }
-  }
-  const right = remote && job.status === 'remote' ? `Torrent · ${job.remoteState || 'starting'}`
-    : job.status === 'paused' ? 'Paused'
-    : job.status === 'queued' ? 'Starting…'
-      : job.status === 'error' ? 'Failed'
-        : `${job.bps ? speed(job.bps) : '…'} · ${duration(left)}`
-
+// A small labeled stat; values are green so live numbers stand out.
+function Stat({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <Card className="gap-3 p-3 animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
-      <div className="flex items-start gap-2">
-        <p className="min-w-0 flex-1 truncate pt-1 text-[15px] font-medium" title={job.name}>{job.name}</p>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="ghost" className="-mr-1 -mt-1 font-mono" aria-label="Menu">···</Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
-            {job.status === 'paused' && <DropdownMenuItem onSelect={() => act(() => api.jobAction(job.id, 'resume'))}>Resume</DropdownMenuItem>}
-            {(job.status === 'copying' || job.status === 'queued' || job.status === 'remote') && <DropdownMenuItem onSelect={() => act(() => api.jobAction(job.id, 'pause'))}>Pause</DropdownMenuItem>}
-            {job.status === 'error' && <DropdownMenuItem onSelect={() => act(() => api.jobAction(job.id, 'retry'))}>Retry</DropdownMenuItem>}
-            {job.url && <DropdownMenuItem onSelect={async () => { await copy(job.url); toast.success('Link copied') }}>{job.kind === 'magnet' ? 'Copy magnet link' : 'Copy source link'}</DropdownMenuItem>}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={() => act(() => api.removeJob(job.id), 'Cancelled')}>Cancel</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-      <WideProgress size="md" value={pct} left={`${pct.toFixed(1)}%`} right={right} muted={job.status === 'paused'} />
-      <div className="flex items-center justify-between font-mono text-xs tabular-nums text-muted-foreground">
-        <span>{remote ? `Step 1 of 2: TorBox is downloading · ${job.size > 0 ? bytes(job.size) : 'getting info'}` : `${bytes(job.copied)} / ${job.size > 0 ? bytes(job.size) : '?'}`}</span>
-        {job.error && <span className="truncate pl-3 text-destructive">{job.error}</span>}
-      </div>
-    </Card>
+    <div className="min-w-0 rounded-md bg-white/[0.03] px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="truncate font-mono text-[13px] font-semibold tabular-nums text-emerald-400">{value}</div>
+    </div>
   )
 }
 
-function FileRow({ f }: { f: Entry }) {
-  const { prefs, play } = useApp()
-  const url = f.url!
-  const playable = isMedia(f.name) || isImage(f.name)
-  const onPlay = () => {
-    if (isVideo(f.name) && prefs.autoOpen && platform() !== 'desktop') openInApp(preferredPlayer(prefs), url, f.name)
-    else play({ url, name: f.name })
+function useNow(active: boolean) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (!active) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [active])
+  return now
+}
+
+function JobRow({ job, onChange }: { job: Job; onChange: () => void }) {
+  const remote = job.status === 'remote' || (job.kind === 'magnet' && job.status !== 'done')
+  const running = job.status === 'copying' || job.status === 'remote' || job.status === 'queued'
+  const now = useNow(running)
+  const rs = job.remoteStats
+  const pct = remote ? (job.remoteProgress ?? 0) * 100 : job.size > 0 ? (job.copied / job.size) * 100 : 0
+  const elapsed = now - (job.startedAt || job.createdAt)
+  const avg = !remote && job.copied > 0 ? job.copied / Math.max(1, elapsed / 1000) : 0
+  const down = remote ? rs?.down || 0 : job.bps || 0
+  const eta = remote ? (rs?.eta ? rs.eta * 1000 : null) : job.bps && job.size > 0 ? ((job.size - job.copied) / job.bps) * 1000 : null
+  const totalParts = job.size > 0 ? Math.max(1, Math.ceil(job.size / (100 * 1024 * 1024))) : 0
+  const host = (() => { try { return job.url && !job.url.startsWith('magnet:') ? new URL(job.url).host : 'TorBox' } catch { return '—' } })()
+
+  const act = async (fn: () => Promise<unknown>, msg?: string) => {
+    try { await fn(); if (msg) toast(msg); onChange() } catch (e) { toast.error((e as Error).message) }
   }
+  const right = job.status === 'paused' ? 'Paused'
+    : job.status === 'error' ? 'Failed'
+      : job.status === 'queued' ? 'Starting…'
+        : remote ? (job.remoteState || 'Starting…')
+          : eta ? `${duration(eta)} left` : `Part ${Math.min(totalParts, Math.floor(job.copied / (100 * 1024 * 1024)) + 1)}/${totalParts} in progress`
+
   return (
-    <Card className="gap-3 p-3 animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
+    <Card className="gap-2.5 p-3 animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
       <div className="flex items-center gap-2">
-        <p className="min-w-0 flex-1 truncate text-[15px] font-medium" title={f.name}>{f.name}</p>
-        <Badge variant="outline" className="shrink-0 font-mono">{bytes(f.size)}</Badge>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[15px] font-medium" title={job.name}>{job.name}</p>
+          <p className="text-[11px] text-muted-foreground">{remote ? 'Step 1 of 2 · TorBox downloading' : 'Copying to cloud'}</p>
+        </div>
+        {job.status === 'paused'
+          ? <Button size="icon" variant="ghost" aria-label="Resume" onClick={() => act(() => api.jobAction(job.id, 'resume'))}><Play /></Button>
+          : job.status === 'error'
+            ? <Button size="icon" variant="ghost" aria-label="Retry" onClick={() => act(() => api.jobAction(job.id, 'retry'))}><RotateCw /></Button>
+            : <Button size="icon" variant="ghost" aria-label="Pause" onClick={() => act(() => api.jobAction(job.id, 'pause'))}><Pause /></Button>}
+        <Button size="icon" variant="ghost" aria-label="Cancel" className="hover:text-destructive" onClick={() => act(() => api.removeJob(job.id), 'Cancelled')}><X /></Button>
       </div>
-      <div className="grid grid-cols-3 gap-2">
-        <Button className="h-11" disabled={!playable} onClick={onPlay}>Play</Button>
-        <Button variant="outline" className="h-11" onClick={async () => { await copy(absolute(url)); toast.success('Link copied') }}>Copy</Button>
-        <Button variant="outline" className="h-11" asChild><a href={absolute(url, true)} download>Download</a></Button>
+
+      <WideProgress size="md" tone="blue" value={pct} left={`${pct.toFixed(1)}%`} right={right} muted={job.status === 'paused'} />
+
+      {job.error
+        ? <p className="text-xs text-destructive">{job.error}</p>
+        : (
+          <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+            <Stat label="↓ Down" value={speed(down)} />
+            <Stat label={remote ? '↑ Up' : '↑ To cloud'} value={speed(remote ? rs?.up || 0 : job.bps || 0)} />
+            <Stat label="ETA" value={duration(eta)} />
+            {remote ? (
+              <>
+                <Stat label="Seeds" value={rs?.seeds ?? 0} />
+                <Stat label="Peers" value={rs?.peers ?? 0} />
+                <Stat label="Size" value={job.size > 0 ? bytes(job.size) : '…'} />
+              </>
+            ) : (
+              <>
+                <Stat label="Done" value={`${bytes(job.copied)} / ${job.size > 0 ? bytes(job.size) : '?'}`} />
+                <Stat label="Avg" value={speed(avg)} />
+                <Stat label="Part" value={totalParts ? `${Math.min(totalParts, Math.floor(job.copied / (100 * 1024 * 1024)) + 1)}/${totalParts}` : '—'} />
+              </>
+            )}
+          </div>
+        )}
+      <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+        <span className="truncate">{host}</span>
+        <span>{duration(elapsed)} elapsed</span>
       </div>
     </Card>
   )
@@ -143,7 +165,7 @@ export function HomePage({ jobs, refresh, onViewAll }: { jobs: Job[] | null; ref
   }, [doneCount])
 
   const working = jobs?.filter(j => j.status !== 'done') ?? []
-  const recent = files?.slice(0, 5) ?? []
+  const recent = files?.slice(0, 8) ?? []
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5">
@@ -168,11 +190,11 @@ export function HomePage({ jobs, refresh, onViewAll }: { jobs: Job[] | null; ref
       )}
 
       {recent.length > 0 && (
-        <section className="space-y-3">
+        <section className="space-y-2">
           <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Latest files</h2>
           {recent.map(f => <FileRow key={f.path} f={f} />)}
-          <Button variant="outline" className="h-12 w-full text-base" onClick={onViewAll}>
-            View all files{files!.length > 5 ? ` (${files!.length})` : ''}
+          <Button variant="outline" className="mt-1 h-11 w-full" onClick={onViewAll}>
+            View all files{files!.length > 8 ? ` (${files!.length})` : ''}
           </Button>
         </section>
       )}

@@ -62,7 +62,7 @@ export default function App() {
   }
 
   const copying = jobs?.filter(j => j.status === 'copying' || j.status === 'queued' || j.status === 'remote') ?? []
-  const rate = copying.reduce((n, j) => n + (j.bps || 0), 0)
+  const rate = copying.reduce((n, j) => n + (j.status === 'remote' ? j.remoteStats?.down || 0 : j.bps || 0), 0)
 
   return (
     <AppContext.Provider value={ctx}>
@@ -85,7 +85,7 @@ export default function App() {
               ))}
             </TabsList>
             {copying.length > 0 && (
-              <div className="ml-auto rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-xs tabular-nums">
+              <div className="ml-auto rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 font-mono text-xs font-semibold tabular-nums text-emerald-400">
                 ↓ {speed(rate)}
               </div>
             )}
