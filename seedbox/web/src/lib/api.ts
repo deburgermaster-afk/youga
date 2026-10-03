@@ -121,3 +121,15 @@ export const ext = (name: string) => (name.includes('.') ? name.split('.').pop()
 export const isMedia = (name: string) => isVideo(name) || isAudio(name)
 // Formats browsers play natively; others (mkv/avi) go to an external app.
 export const browserPlayable = (name: string) => /\.(mp4|m4v|webm|mov|mp3|m4a|ogg|wav|flac|aac|opus)$/i.test(name)
+
+// The file most people want from a torrent: the biggest video/audio file,
+// otherwise the biggest file.
+export function mainFile(t: Torrent): TFile | undefined {
+  const bySize = [...t.files].sort((a, b) => b.length - a.length)
+  return bySize.find(f => isMedia(f.name)) ?? bySize[0]
+}
+
+// Prefer the cloud copy once uploaded: it streams from Cloudflare.
+export function fileLink(t: Torrent, f: TFile) {
+  return t.cloud?.status === 'done' ? '/cloud/' + f.path.split(/[\\/]/).map(encodeURIComponent).join('/') : f.url
+}

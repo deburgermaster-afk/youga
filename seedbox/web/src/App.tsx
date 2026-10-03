@@ -1,19 +1,18 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { AddTorrent, addMany } from '@/components/add-torrent'
+import { addMany } from '@/components/add-torrent'
 import { Player } from '@/components/player'
 import { TorrentPanel } from '@/components/torrent-panel'
 import { DownloadsPage } from '@/pages/downloads'
-import { FilesPage } from '@/pages/files'
+import { HomePage } from '@/pages/home'
 import { LogsPage } from '@/pages/logs'
 import { SettingsPage } from '@/pages/settings'
 import { LoginPage } from '@/pages/login'
 import { useLive } from '@/hooks/use-live'
-import { api, bytes, speed } from '@/lib/api'
+import { api, speed } from '@/lib/api'
 import { loadPrefs, savePrefs, setLinkToken, type Prefs } from '@/lib/links'
 import { AppContext, type Media } from '@/lib/app-context'
 import { cn } from '@/lib/utils'
@@ -22,8 +21,8 @@ import { cn } from '@/lib/utils'
 const StatsPage = lazy(() => import('@/pages/stats').then(m => ({ default: m.StatsPage })))
 
 const PAGES = [
-  { id: 'downloads', label: 'Downloads' },
-  { id: 'files', label: 'Files' },
+  { id: 'home', label: 'Home' },
+  { id: 'downloads', label: 'All' },
   { id: 'stats', label: 'Stats' },
   { id: 'logs', label: 'Logs' },
   { id: 'settings', label: 'Settings' },
@@ -31,7 +30,10 @@ const PAGES = [
 
 const PAGE_KEY = 'seedbox:page'
 const initialPage = () => {
-  try { return localStorage.getItem(PAGE_KEY) || 'downloads' } catch { return 'downloads' }
+  try {
+    const p = localStorage.getItem(PAGE_KEY)
+    return PAGES.some(x => x.id === p) ? p! : 'home'
+  } catch { return 'home' }
 }
 
 export default function App() {
@@ -39,7 +41,6 @@ export default function App() {
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs)
   const [media, setMedia] = useState<Media | null>(null)
   const [page, setPage] = useState(initialPage)
-  const [adding, setAdding] = useState(false)
   const [openHash, setOpenHash] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const { data, connected, history, logs, clearLogs } = useLive(!!auth?.ok)
@@ -129,22 +130,20 @@ export default function App() {
             <h1 className="text-lg font-semibold tracking-tight">Seedbox</h1>
             <Badge variant={connected ? 'secondary' : 'outline'} className="font-normal">{connected ? 'Live' : 'Offline'}</Badge>
             {nav('ml-4 hidden md:flex', false)}
-            <Button className="ml-auto h-10 px-5" onClick={() => setAdding(true)}>Add</Button>
           </div>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 pb-3 font-mono text-[13px] tabular-nums md:px-6">
             <span className="shrink-0"><span className="text-muted-foreground">Down </span>{speed(stats?.downloadSpeed ?? 0)}</span>
             <span className="shrink-0"><span className="text-muted-foreground">Up </span>{speed(stats?.uploadSpeed ?? 0)}</span>
             <span className="shrink-0"><span className="text-muted-foreground">Peers </span>{stats?.peers ?? 0}</span>
-            <span className="shrink-0"><span className="text-muted-foreground">Free </span>{bytes(stats?.disk.free ?? 0)}</span>
           </div>
         </header>
 
         <main className="w-full px-4 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-6 md:pb-10">
-          <TabsContent value="downloads" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
-            <DownloadsPage torrents={torrents} loading={!data} onOpen={setOpenHash} onAdd={() => setAdding(true)} />
+          <TabsContent value="home" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
+            <HomePage torrents={torrents} loading={!data} onOpen={setOpenHash} onViewAll={() => goto('downloads')} />
           </TabsContent>
-          <TabsContent value="files" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
-            <FilesPage stats={stats} />
+          <TabsContent value="downloads" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
+            <DownloadsPage torrents={torrents} loading={!data} onOpen={setOpenHash} onAdd={() => goto('home')} />
           </TabsContent>
           <TabsContent value="stats" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
             <Suspense fallback={<div className="flex justify-center py-16"><Spinner className="size-6" /></div>}>
@@ -169,7 +168,6 @@ export default function App() {
         </nav>
       </Tabs>
 
-      <AddTorrent open={adding} onOpenChange={setAdding} />
       <TorrentPanel t={openTorrent} onClose={() => setOpenHash(null)} />
       <Player media={media} onClose={() => setMedia(null)} />
       <Toaster theme="dark" position="top-center" />

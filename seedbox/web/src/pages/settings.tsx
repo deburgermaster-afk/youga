@@ -48,7 +48,7 @@ export function SettingsPage({ stats, connected, authRequired, onLogout }: {
     } catch (e) { toast.error((e as Error).message) }
   }
 
-  const saveCloud = async (v: { autoUpload?: boolean; deleteLocal?: boolean }) => {
+  const saveCloud = async (v: { autoUpload?: boolean }) => {
     try { await api.settings(v); toast.success('Saved') } catch (e) { toast.error((e as Error).message) }
   }
 
@@ -111,7 +111,7 @@ export function SettingsPage({ stats, connected, authRequired, onLogout }: {
           <CardDescription>
             {stats?.cloud.enabled
               ? <>Connected to bucket <span className="font-mono text-foreground">{stats.cloud.bucket}</span></>
-              : 'Not set up. Add your Cloudflare R2 keys to the server to turn it on.'}
+              : 'Not set up yet. Add your Cloudflare R2 keys to the server.'}
           </CardDescription>
         </CardHeader>
         {stats?.cloud.enabled && (
@@ -123,14 +123,6 @@ export function SettingsPage({ stats, connected, authRequired, onLogout }: {
                   <FieldDescription>Copies every completed torrent to the cloud automatically.</FieldDescription>
                 </FieldContent>
                 <Switch id="autoUpload" checked={stats.cloud.autoUpload} onCheckedChange={v => saveCloud({ autoUpload: v })} />
-              </Field>
-              <FieldSeparator />
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldLabel htmlFor="deleteLocal">Free up server space after upload</FieldLabel>
-                  <FieldDescription>Deletes the server copy once it’s safely in the cloud. Stops seeding that torrent.</FieldDescription>
-                </FieldContent>
-                <Switch id="deleteLocal" checked={stats.cloud.deleteLocal} onCheckedChange={v => saveCloud({ deleteLocal: v })} />
               </Field>
             </FieldGroup>
           </CardContent>
