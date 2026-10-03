@@ -10,12 +10,31 @@ import { WideProgress } from '@/components/wide-progress'
 import { RemoveTorrent } from '@/components/remove-torrent'
 import { api, bytes, duration, speed, type Torrent } from '@/lib/api'
 import { absolute, copy } from '@/lib/links'
+import { useApp } from '@/lib/app-context'
 
 export function statusOf(t: Torrent) {
   if (t.paused) return 'Paused'
   if (!t.ready) return 'Connecting'
   if (t.done) return 'Seeding'
   return 'Downloading'
+}
+
+export async function uploadToCloud(t: Torrent) {
+  try {
+    await api.upload(t.infoHash)
+    toast.success('Uploading to cloud', { description: t.name })
+  } catch (e) {
+    toast.error((e as Error).message)
+  }
+}
+
+export function CloudBadge({ t }: { t: Torrent }) {
+  const c = t.cloud
+  if (!c) return null
+  if (c.status === 'done') return <Badge variant="secondary">In cloud</Badge>
+  if (c.status === 'error') return <Badge variant="destructive" title={c.error}>Cloud upload failed</Badge>
+  if (c.status === 'queued') return <Badge variant="outline">Cloud: queued</Badge>
+  return <Badge variant="outline" className="font-mono tabular-nums">Cloud {(c.progress * 100).toFixed(0)}%</Badge>
 }
 
 function Cell({ label, value }: { label: string; value: React.ReactNode }) {
@@ -29,6 +48,7 @@ function Cell({ label, value }: { label: string; value: React.ReactNode }) {
 
 export const TorrentItem = memo(function TorrentItem({ t, onOpen }: { t: Torrent; onOpen: (hash: string) => void }) {
   const [confirm, setConfirm] = useState(false)
+  const { cloudEnabled } = useApp()
   const pct = t.progress * 100
   const status = statusOf(t)
 
@@ -49,6 +69,7 @@ export const TorrentItem = memo(function TorrentItem({ t, onOpen }: { t: Torrent
           <Badge variant={status === 'Downloading' ? 'default' : status === 'Seeding' ? 'secondary' : 'outline'}>{status}</Badge>
           <span className="font-mono text-xs tabular-nums">{bytes(t.length)}</span>
           {t.files.length > 0 && <span className="text-xs">{t.files.length} file{t.files.length > 1 ? 's' : ''}</span>}
+          <CloudBadge t={t} />
         </CardDescription>
         <CardAction>
           <DropdownMenu>
@@ -59,6 +80,9 @@ export const TorrentItem = memo(function TorrentItem({ t, onOpen }: { t: Torrent
               <DropdownMenuItem onSelect={() => onOpen(t.infoHash)}>Files and details</DropdownMenuItem>
               <DropdownMenuItem onSelect={toggle}>{t.paused ? 'Resume' : 'Pause'}</DropdownMenuItem>
               <DropdownMenuItem onSelect={async () => { await copy(t.magnet); toast.success('Magnet link copied') }}>Copy magnet link</DropdownMenuItem>
+              {cloudEnabled && t.done && (
+                <DropdownMenuItem onSelect={() => uploadToCloud(t)}>{t.cloud?.status === 'done' ? 'Upload to cloud again' : 'Upload to cloud'}</DropdownMenuItem>
+              )}
               {t.files.length > 0 && (
                 <DropdownMenuItem asChild><a href={absolute(`/api/torrents/${t.infoHash}/playlist.m3u`)}>Download M3U playlist</a></DropdownMenuItem>
               )}

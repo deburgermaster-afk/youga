@@ -13,11 +13,17 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/u
 import { Input } from '@/components/ui/input'
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { FileMenu } from '@/components/file-menu'
 import { WideProgress } from '@/components/wide-progress'
 import { api, bytes, ext, type DiskEntry, type Stats } from '@/lib/api'
 
+type Source = 'server' | 'cloud'
+
 export function FilesPage({ stats }: { stats?: Stats }) {
+  const cloudOn = !!stats?.cloud.enabled
+  const [source, setSource] = useState<Source>('server')
+  const [usage, setUsage] = useState<{ bytes: number; count: number } | null>(null)
   const [path, setPath] = useState('')
   const [entries, setEntries] = useState<DiskEntry[] | null>(null)
   const [del, setDel] = useState<DiskEntry | null>(null)
@@ -25,25 +31,30 @@ export function FilesPage({ stats }: { stats?: Stats }) {
 
   const load = useCallback(async (p: string) => {
     try {
-      setEntries((await api.disk(p)).entries)
+      setEntries(source === 'cloud' ? (await api.cloud(p ? p + '/' : '')).entries : (await api.disk(p)).entries)
     } catch (e) {
       toast.error((e as Error).message)
       setEntries([])
     }
-  }, [])
+  }, [source])
 
   useEffect(() => {
     load(path)
-    const id = setInterval(() => load(path), 5000)
+    const id = setInterval(() => load(path), source === 'cloud' ? 15000 : 5000)
     return () => clearInterval(id)
-  }, [path, load])
+  }, [path, load, source])
 
-  const go = (p: string) => { setEntries(null); setQ(''); setPath(p) }
+  useEffect(() => {
+    if (source === 'cloud') api.cloudUsage().then(setUsage).catch(() => setUsage(null))
+  }, [source, entries])
+
+  const go = (p: string) => { setEntries(null); setQ(''); setPath(p.replace(/\/$/, '')) }
+  const switchSource = (s: Source) => { setSource(s); setEntries(null); setQ(''); setPath('') }
 
   const remove = async () => {
     if (!del) return
     try {
-      await api.diskDelete(del.path)
+      await (source === 'cloud' ? api.cloudDelete(del.path) : api.diskDelete(del.path))
       toast.success('Deleted', { description: del.name })
       load(path)
     } catch (e) { toast.error((e as Error).message) }
@@ -57,6 +68,24 @@ export function FilesPage({ stats }: { stats?: Stats }) {
 
   return (
     <div className="space-y-4">
+      {cloudOn && (
+        <ToggleGroup type="single" variant="outline" value={source} onValueChange={v => v && switchSource(v as Source)} className="w-full">
+          <ToggleGroupItem value="server" className="h-11 flex-1 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Server</ToggleGroupItem>
+          <ToggleGroupItem value="cloud" className="h-11 flex-1 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Cloud</ToggleGroupItem>
+        </ToggleGroup>
+      )}
+
+      {source === 'cloud' ? (
+        <Card className="gap-1 py-4">
+          <CardHeader className="px-4">
+            <CardTitle>Cloud storage</CardTitle>
+            <CardDescription className="font-mono tabular-nums">
+              {usage ? `${bytes(usage.bytes)} in ${usage.count} files · bucket ${stats?.cloud.bucket}` : 'Loading…'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-4 text-xs text-muted-foreground">Streams straight from the cloud. Works even when the server is off.</CardContent>
+        </Card>
+      ) : (
       <Card className="gap-3 py-4">
         <CardHeader className="px-4">
           <CardTitle>Storage</CardTitle>
@@ -66,6 +95,7 @@ export function FilesPage({ stats }: { stats?: Stats }) {
           <WideProgress value={pct} size="md" left={`${pct.toFixed(0)}% used`} right={`${bytes(stats?.disk.free ?? 0)} free`} />
         </CardContent>
       </Card>
+      )}
 
       <div className="flex items-center gap-2">
         <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter this folder" className="h-11" type="search" />
@@ -75,7 +105,9 @@ export function FilesPage({ stats }: { stats?: Stats }) {
       <Breadcrumb>
         <BreadcrumbList className="text-sm">
           <BreadcrumbItem>
-            {crumbs.length ? <BreadcrumbLink asChild><button onClick={() => go('')}>All files</button></BreadcrumbLink> : <BreadcrumbPage>All files</BreadcrumbPage>}
+            {crumbs.length
+              ? <BreadcrumbLink asChild><button onClick={() => go('')}>{source === 'cloud' ? 'Cloud' : 'All files'}</button></BreadcrumbLink>
+              : <BreadcrumbPage>{source === 'cloud' ? 'Cloud' : 'All files'}</BreadcrumbPage>}
           </BreadcrumbItem>
           {crumbs.map((c, i) => (
             <span key={i} className="contents">
@@ -96,7 +128,7 @@ export function FilesPage({ stats }: { stats?: Stats }) {
         <Empty className="border border-dashed py-14">
           <EmptyHeader>
             <EmptyTitle>Empty</EmptyTitle>
-            <EmptyDescription>Finished downloads show up here.</EmptyDescription>
+            <EmptyDescription>{source === "cloud" ? "Finished downloads are uploaded here automatically." : "Finished downloads show up here."}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}
@@ -113,7 +145,7 @@ export function FilesPage({ stats }: { stats?: Stats }) {
           <Item key={e.path} variant="outline" className="animate-in fade-in-0 duration-200">
             <button className="flex min-w-0 flex-1 flex-col items-start gap-1 text-left" onClick={() => go(e.path)}>
               <ItemTitle className="break-all">{e.name}/</ItemTitle>
-              <ItemDescription className="font-mono text-xs tabular-nums">Folder · {bytes(e.size)}</ItemDescription>
+              <ItemDescription className="font-mono text-xs tabular-nums">{source === 'cloud' ? 'Folder' : `Folder · ${bytes(e.size)}`}</ItemDescription>
             </button>
             <ItemActions>
               <Button size="sm" variant="outline" onClick={() => go(e.path)}>Open</Button>
@@ -139,8 +171,8 @@ export function FilesPage({ stats }: { stats?: Stats }) {
       <AlertDialog open={!!del} onOpenChange={o => !o && setDel(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete from server?</AlertDialogTitle>
-            <AlertDialogDescription className="break-all">{del?.name} ({bytes(del?.size ?? 0)}) will be permanently deleted.</AlertDialogDescription>
+            <AlertDialogTitle>{source === 'cloud' ? 'Delete from cloud?' : 'Delete from server?'}</AlertDialogTitle>
+            <AlertDialogDescription className="break-all">{del?.name}{del?.isDir && source === 'cloud' ? ' and everything in it' : ` (${bytes(del?.size ?? 0)})`} will be permanently deleted.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

@@ -90,6 +90,10 @@ DOWNLOAD_DIR=$DATA_DIR
 TORRENT_PORT=$TORRENT_PORT
 APP_PASSWORD="$APP_PASSWORD"
 EOF
+# Optional Cloudflare R2 (or any S3) storage for finished downloads.
+for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET S3_ENDPOINT; do
+  if [ -n "${!v:-}" ]; then echo "$v=${!v}" >> "$ENV_FILE"; fi
+done
 umask 022
 
 cat > /etc/systemd/system/seedbox.service <<EOF

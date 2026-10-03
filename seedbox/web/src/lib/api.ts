@@ -24,6 +24,7 @@ export type Torrent = {
   paused: boolean
   done: boolean
   addedAt: number
+  cloud: { status: 'queued' | 'uploading' | 'done' | 'error'; progress: number; error?: string } | null
   files: TFile[]
 }
 
@@ -37,6 +38,7 @@ export type Stats = {
   downloadLimit: number
   uploadLimit: number
   disk: { total: number; free: number }
+  cloud: { enabled: boolean; bucket: string; autoUpload: boolean; deleteLocal: boolean }
 }
 
 export type LogEntry = { id: number; ts: number; level: 'info' | 'success' | 'warn' | 'error'; msg: string }
@@ -82,7 +84,11 @@ export const api = {
   clearLogs: () => req('/api/logs', { method: 'DELETE' }),
   action: (hash: string, action: 'pause' | 'resume') => req<Torrent>(`/api/torrents/${hash}/${action}`, { method: 'POST' }),
   remove: (hash: string, files: boolean) => req(`/api/torrents/${hash}?files=${files ? 1 : 0}`, { method: 'DELETE' }),
-  settings: (s: { downloadLimit?: number; uploadLimit?: number }) => req('/api/settings', json(s)),
+  settings: (s: { downloadLimit?: number; uploadLimit?: number; autoUpload?: boolean; deleteLocal?: boolean }) => req('/api/settings', json(s)),
+  upload: (hash: string) => req<Torrent>(`/api/torrents/${hash}/upload`, { method: 'POST' }),
+  cloud: (prefix: string) => req<{ prefix: string; entries: DiskEntry[] }>(`/api/cloud?prefix=${encodeURIComponent(prefix)}`),
+  cloudUsage: () => req<{ bytes: number; count: number }>('/api/cloud/usage'),
+  cloudDelete: (key: string) => req(`/api/cloud?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
   disk: (path: string) => req<{ path: string; entries: DiskEntry[] }>(`/api/disk?path=${encodeURIComponent(path)}`),
   diskDelete: (path: string) => req(`/api/disk?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
 }

@@ -37,8 +37,24 @@ For UI development, run `npm run dev` here and `npm run dev --prefix web` in a s
 | `APP_PASSWORD` | *(none)*       | Login password (strongly advised)           |
 | `HOST`         | all interfaces | Bind address (`127.0.0.1` behind a proxy)   |
 | `TORRENT_PORT` | random         | Fixed peer port to open in the firewall     |
+| `R2_ACCOUNT_ID` | *(none)*      | Cloudflare account ID, to turn on cloud storage |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | *(none)* | R2 API token keys |
+| `R2_BUCKET`    | `seedbox-files` | Bucket for finished downloads             |
+| `S3_ENDPOINT`  | *(none)*       | Use any other S3-compatible storage instead of R2 |
 
 Changing `APP_PASSWORD` invalidates every shared link and every login session.
+
+## Cloud storage (Cloudflare R2)
+
+When the R2 variables are set, finished downloads are uploaded to R2 automatically. They then appear under **Files → Cloud**, and they stream straight from Cloudflare, even if the server is off. R2 charges nothing for data sent out, and the first 10 GB of storage are free. After that, storage costs $0.015 per GB per month, so 50 GB is about $0.60.
+
+Settings has two switches: one turns automatic upload on or off, and the other deletes the server copy after upload to free disk space.
+
+To set it up:
+1. In the Cloudflare dashboard, open **R2** and enable it.
+2. Create a bucket named `seedbox-files`.
+3. Under **R2 → Manage API tokens**, create a token with *Object Read & Write* access for that bucket.
+4. Copy the Access Key ID, the Secret Access Key and your Account ID into the variables above.
 
 ## Free hosting with 200 GB (Oracle Cloud Always Free)
 

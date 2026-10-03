@@ -7,6 +7,7 @@ export type AppCtx = {
   prefs: Prefs
   setPrefs: (p: Prefs) => void
   play: (m: Media) => void
+  cloudEnabled: boolean
 }
 
 export const AppContext = createContext<AppCtx>(null!)

@@ -4,6 +4,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import * as cloud from './cloud.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
@@ -52,7 +53,7 @@ function log (level, msg) {
 }
 
 // ---------- State ----------
-const state = { torrents: [], downloadLimit: -1, uploadLimit: -1 }
+const state = { torrents: [], downloadLimit: -1, uploadLimit: -1, autoUpload: true, deleteLocal: false, cloudDone: [] }
 try { Object.assign(state, JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))) } catch {}
 
 const client = new WebTorrent({ maxConns: 300, torrentPort: TORRENT_PORT })
@@ -67,6 +68,13 @@ function saveState () {
     .filter(t => t.infoHash)
     .map(t => ({ magnet: t.magnetURI, infoHash: t.infoHash, addedAt: addedAt.get(t.infoHash) || Date.now(), paused: t.paused, done: t.done }))
   fs.writeFile(STATE_FILE, JSON.stringify(state), () => {})
+}
+
+// destroyStore removes files but leaves empty folders behind; tidy them up.
+function removeTorrentDir (name) {
+  if (!name) return
+  const dir = path.resolve(DOWNLOAD_DIR, name)
+  if (dir.startsWith(DOWNLOAD_DIR + path.sep)) fs.rm(dir, { recursive: true, force: true }, () => {})
 }
 
 function findTorrent (hash) {
@@ -96,6 +104,7 @@ function addTorrent (id, { paused = false, wasDone = false } = {}) {
     torrent.once('done', () => {
       if (!wasDone) log('success', `Download complete: ${torrent.name}`)
       saveState()
+      if (state.autoUpload && !state.cloudDone.includes(torrent.infoHash)) queueUpload(torrent)
     })
     // Skip routine DHT/tracker chatter; keep real warnings.
     torrent.on('warning', err => {
@@ -111,6 +120,63 @@ function addTorrent (id, { paused = false, wasDone = false } = {}) {
 for (const t of state.torrents) {
   const cached = t.infoHash && fs.existsSync(metaFile(t.infoHash)) ? fs.readFileSync(metaFile(t.infoHash)) : null
   addTorrent(cached || t.magnet, { paused: t.paused, wasDone: !!t.done }).catch(err => log('error', `Resume failed: ${err.message}`))
+}
+
+// ---------- Cloud upload queue ----------
+// One torrent uploads at a time so local bandwidth isn't split.
+const cloudJobs = new Map()
+let cloudQueue = Promise.resolve()
+
+function queueUpload (t) {
+  if (!cloud.cloudEnabled || !t.done) return false
+  const existing = cloudJobs.get(t.infoHash)
+  if (existing && (existing.status === 'queued' || existing.status === 'uploading')) return false
+  const job = { status: 'queued', uploaded: 0, total: t.length }
+  cloudJobs.set(t.infoHash, job)
+  cloudQueue = cloudQueue.then(async () => {
+    if (t.destroyed) { cloudJobs.delete(t.infoHash); return }
+    job.status = 'uploading'
+    log('info', `Uploading to cloud: ${t.name}`)
+    try {
+      let base = 0
+      for (const f of t.files) {
+        await cloud.uploadFile(path.join(DOWNLOAD_DIR, f.path), f.path, mimeFor(f.name), n => { job.uploaded = base + n })
+        base += f.length
+        job.uploaded = base
+      }
+      job.status = 'done'
+      if (!state.cloudDone.includes(t.infoHash)) state.cloudDone.push(t.infoHash)
+      saveState()
+      log('success', `Saved to cloud: ${t.name}`)
+      if (state.deleteLocal) {
+        const name = t.name
+        addedAt.delete(t.infoHash)
+        fs.rm(metaFile(t.infoHash), { force: true }, () => {})
+        await t.destroy({ destroyStore: true })
+        removeTorrentDir(name)
+        saveState()
+        log('info', `Freed local space: ${name} (kept in cloud)`)
+      }
+    } catch (err) {
+      job.status = 'error'
+      job.error = err.message
+      log('error', `Cloud upload failed for ${t.name}: ${err.message}`)
+    }
+  })
+  return true
+}
+
+function cloudStatus (t) {
+  const job = cloudJobs.get(t.infoHash)
+  if (job) return { status: job.status, progress: job.total ? job.uploaded / job.total : 0, error: job.error }
+  if (state.cloudDone.includes(t.infoHash)) return { status: 'done', progress: 1 }
+  return null
+}
+
+let usageCache = { at: 0, value: null }
+async function cloudUsage () {
+  if (Date.now() - usageCache.at > 60_000) usageCache = { at: Date.now(), value: await cloud.usage() }
+  return usageCache.value
 }
 
 // ---------- Serialization ----------
@@ -135,6 +201,7 @@ function serialize (t) {
     paused: t.paused,
     done: t.done,
     addedAt: addedAt.get(t.infoHash) || 0,
+    cloud: cloudStatus(t),
     files: (t.files || []).map((f, i) => ({
       index: i, name: f.name, path: f.path, length: f.length, progress: num(f.progress), url: fileUrl(t, i)
     }))
@@ -161,7 +228,8 @@ function snapshot () {
       seeding: client.torrents.filter(t => !t.paused && t.done).length,
       downloadLimit: state.downloadLimit,
       uploadLimit: state.uploadLimit,
-      disk: diskStats()
+      disk: diskStats(),
+      cloud: { enabled: cloud.cloudEnabled, bucket: cloud.bucket, autoUpload: state.autoUpload, deleteLocal: state.deleteLocal }
     },
     torrents: client.torrents.map(serialize).sort((a, b) => b.addedAt - a.addedAt)
   }
@@ -193,7 +261,7 @@ app.post('/api/logout', (req, res) => {
   res.set('Set-Cookie', 'sb=; Path=/; Max-Age=0').json({ ok: true })
 })
 
-app.use(['/api', '/files', '/disk'], requireAuth)
+app.use(['/api', '/files', '/disk', '/cloud'], requireAuth)
 
 app.get('/api/state', (req, res) => res.json(snapshot()))
 
@@ -247,6 +315,13 @@ app.delete('/api/logs', (req, res) => {
 app.post('/api/torrents/:hash/:action', (req, res) => {
   const t = findTorrent(req.params.hash)
   if (!t) return res.sendStatus(404)
+  if (req.params.action === 'upload') {
+    if (!cloud.cloudEnabled) return res.status(400).json({ error: 'Cloud storage is not set up' })
+    if (!t.done) return res.status(400).json({ error: 'Finish downloading first' })
+    state.cloudDone = state.cloudDone.filter(h => h !== t.infoHash)
+    queueUpload(t)
+    return res.json(serialize(t))
+  }
   if (req.params.action === 'pause') t.pause()
   else if (req.params.action === 'resume') t.resume()
   else return res.sendStatus(400)
@@ -260,6 +335,7 @@ app.delete('/api/torrents/:hash', async (req, res) => {
   if (!t) return res.sendStatus(404)
   const name = t.name
   await t.destroy({ destroyStore: req.query.files === '1' })
+  if (req.query.files === '1') removeTorrentDir(name)
   addedAt.delete(req.params.hash)
   fs.rm(metaFile(req.params.hash), { force: true }, () => {})
   log('info', `Removed ${name}${req.query.files === '1' ? ' and its files' : ''}`)
@@ -289,9 +365,62 @@ app.post('/api/settings', express.json(), (req, res) => {
   const up = limit(req.body.uploadLimit)
   if (down !== undefined) { state.downloadLimit = down; client.throttleDownload(down) }
   if (up !== undefined) { state.uploadLimit = up; client.throttleUpload(up) }
+  if (typeof req.body.autoUpload === 'boolean') state.autoUpload = req.body.autoUpload
+  if (typeof req.body.deleteLocal === 'boolean') state.deleteLocal = req.body.deleteLocal
   log('info', `Speed limits: down ${state.downloadLimit > 0 ? state.downloadLimit + ' B/s' : 'unlimited'}, up ${state.uploadLimit > 0 ? state.uploadLimit + ' B/s' : 'unlimited'}`)
   saveState()
   res.json({ downloadLimit: state.downloadLimit, uploadLimit: state.uploadLimit })
+})
+
+// ---------- Cloud storage ----------
+const cloudUrl = key => '/cloud/' + key.split('/').map(encodeURIComponent).join('/')
+
+app.get('/api/cloud', async (req, res) => {
+  if (!cloud.cloudEnabled) return res.status(404).json({ error: 'Cloud storage is not set up' })
+  try {
+    const prefix = String(req.query.prefix || '')
+    const { folders, files } = await cloud.list(prefix)
+    res.json({
+      prefix,
+      entries: [
+        ...folders.map(f => ({ name: f.slice(prefix.length, -1), path: f, isDir: true, size: 0, mtime: 0, url: null })),
+        ...files.map(f => ({ name: f.key.slice(prefix.length), path: f.key, isDir: false, size: f.size, mtime: f.mtime, url: cloudUrl(f.key) })),
+      ],
+    })
+  } catch (err) {
+    res.status(502).json({ error: err.message })
+  }
+})
+
+app.get('/api/cloud/usage', async (req, res) => {
+  if (!cloud.cloudEnabled) return res.status(404).json({ error: 'Cloud storage is not set up' })
+  try { res.json(await cloudUsage()) } catch (err) { res.status(502).json({ error: err.message }) }
+})
+
+app.delete('/api/cloud', async (req, res) => {
+  if (!cloud.cloudEnabled) return res.status(404).json({ error: 'Cloud storage is not set up' })
+  const key = String(req.query.key || '')
+  if (!key) return res.status(400).json({ error: 'key required' })
+  try {
+    const n = await cloud.remove(key)
+    usageCache.at = 0
+    log('info', `Deleted ${key} from cloud (${n} file${n === 1 ? '' : 's'})`)
+    res.sendStatus(204)
+  } catch (err) {
+    res.status(502).json({ error: err.message })
+  }
+})
+
+// Redirect to a short-lived signed URL; R2 serves the bytes (with Range
+// support) directly, so streaming doesn't pass through this server.
+app.get('/cloud/*splat', async (req, res) => {
+  if (!cloud.cloudEnabled) return res.sendStatus(404)
+  const key = [].concat(req.params.splat).join('/')
+  try {
+    res.redirect(302, await cloud.signedUrl(key, { download: !!req.query.download, contentType: mimeFor(key) }))
+  } catch {
+    res.sendStatus(404)
+  }
 })
 
 // Browse everything stored on the server (finished and in-progress).

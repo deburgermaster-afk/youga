@@ -12,7 +12,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY server.js ./
+COPY server.js cloud.js ./
 COPY --from=web /app/public ./public
 ENV DOWNLOAD_DIR=/data
 EXPOSE 3000

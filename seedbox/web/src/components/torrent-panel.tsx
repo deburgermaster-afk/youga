@@ -10,7 +10,8 @@ import { Panel } from '@/components/panel'
 import { FileMenu } from '@/components/file-menu'
 import { WideProgress } from '@/components/wide-progress'
 import { RemoveTorrent } from '@/components/remove-torrent'
-import { statusOf } from '@/components/torrent-item'
+import { CloudBadge, statusOf, uploadToCloud } from '@/components/torrent-item'
+import { useApp } from '@/lib/app-context'
 import { api, bytes, duration, ext, speed, type TFile, type Torrent } from '@/lib/api'
 import { absolute, copy } from '@/lib/links'
 import { cn } from '@/lib/utils'
@@ -91,6 +92,7 @@ function Tree({ node, depth }: { node: Node; depth: number }) {
 
 export function TorrentPanel({ t, onClose }: { t: Torrent | null; onClose: () => void }) {
   const [confirm, setConfirm] = useState(false)
+  const { cloudEnabled } = useApp()
   const tree = useMemo(() => (t ? build(t.files, t.name) : null), [t])
   const pct = (t?.progress ?? 0) * 100
 
@@ -132,7 +134,16 @@ export function TorrentPanel({ t, onClose }: { t: Torrent | null; onClose: () =>
         {t && (
           <div className="space-y-4">
             <WideProgress value={pct} left={`${pct.toFixed(1)}%`} right={t.done ? 'Complete' : `${speed(t.downloadSpeed)} · ${duration(t.timeRemaining)}`} muted={t.paused} />
+            {t.cloud && t.cloud.status !== 'done' && (
+              <WideProgress size="md" value={t.cloud.progress * 100} left={`Cloud ${(t.cloud.progress * 100).toFixed(0)}%`} right={t.cloud.status === 'error' ? 'Failed' : t.cloud.status === 'queued' ? 'Queued' : 'Uploading'} />
+            )}
+            <div className="flex flex-wrap items-center gap-2"><CloudBadge t={t} /></div>
             <div className="grid grid-cols-2 gap-2">
+              {cloudEnabled && t.done && (
+                <Button className="col-span-2 h-11" onClick={() => uploadToCloud(t)} disabled={t.cloud?.status === 'uploading' || t.cloud?.status === 'queued'}>
+                  {t.cloud?.status === 'done' ? 'Upload to cloud again' : 'Upload to cloud'}
+                </Button>
+              )}
               <Button variant="outline" className="h-11" onClick={() => api.action(t.infoHash, t.paused ? 'resume' : 'pause')}>{t.paused ? 'Resume' : 'Pause'}</Button>
               <Button variant="outline" className="h-11" onClick={async () => { await copy(t.infoHash); toast.success('Info hash copied') }}>Copy hash</Button>
             </div>

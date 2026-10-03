@@ -58,7 +58,8 @@ export default function App() {
   }
 
   const setPrefs = useCallback((p: Prefs) => { setPrefsState(p); savePrefs(p) }, [])
-  const ctx = useMemo(() => ({ prefs, setPrefs, play: setMedia }), [prefs, setPrefs])
+  const cloudEnabled = !!data?.stats.cloud?.enabled
+  const ctx = useMemo(() => ({ prefs, setPrefs, play: setMedia, cloudEnabled }), [prefs, setPrefs, cloudEnabled])
 
   // Drop .torrent files or magnet links anywhere.
   useEffect(() => {

@@ -56,7 +56,7 @@ export function FileMenu({ url, name, onDelete }: { url: string; name: string; o
           {onDelete && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={onDelete}>Delete from server</DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onSelect={onDelete}>Delete</DropdownMenuItem>
             </>
           )}
         </DropdownMenuContent>
