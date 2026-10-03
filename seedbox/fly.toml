@@ -16,7 +16,7 @@ primary_region = "ams"
 [[mounts]]
   source = "seedbox_data"
   destination = "/data"
-  initial_size = "50gb"
+  initial_size = "20gb"
   # Snapshots are billed per GB; downloads can be re-fetched, so skip them.
   scheduled_snapshots = false
 
