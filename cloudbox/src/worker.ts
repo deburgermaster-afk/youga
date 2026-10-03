@@ -210,11 +210,14 @@ async function spawnCopies(env: Env, parent: Job, files: { id: number; name: str
 
 // TorBox download links expire; fetch a fresh one when needed.
 async function resolveUrl(env: Env, job: Job) {
-  if (!job.torbox?.fileId || (job.url && (job.urlExpires || 0) > Date.now())) return
+  // fileId can be 0, so compare against undefined rather than truthiness.
+  if (job.torbox?.fileId === undefined || (job.url && (job.urlExpires || 0) > Date.now())) return
   const { torboxKey } = await getConfig(env)
   if (!torboxKey) throw new Error('TorBox key missing. Add it in Settings.')
   const q = new URLSearchParams({ token: torboxKey, torrent_id: String(job.torbox.torrentId), file_id: String(job.torbox.fileId) })
-  job.url = await torbox<string>(torboxKey, `/torrents/requestdl?${q}`)
+  const link = await torbox<string>(torboxKey, `/torrents/requestdl?${q}`)
+  if (!/^https?:\/\//.test(link || '')) throw new Error('TorBox did not return a download link. Try again in a minute.')
+  job.url = link
   job.urlExpires = Date.now() + 2 * 60 * 60 * 1000
 }
 
@@ -436,7 +439,11 @@ export default {
         return serveFile(req, env, path.slice(3).split('/').map(decodeURIComponent).join('/'))
       }
 
-      if (path === '/api/jobs' && req.method === 'GET') return json({ jobs: await listJobs(env) })
+      // TorBox download links embed the API key, so never send them to the browser.
+      if (path === '/api/jobs' && req.method === 'GET') {
+        const jobs = (await listJobs(env)).map(j => (j.torbox?.fileId !== undefined ? { ...j, url: '' } : j))
+        return json({ jobs })
+      }
 
       if (path === '/api/jobs' && req.method === 'POST') {
         const { url: link } = (await req.json().catch(() => ({}))) as { url?: string }
