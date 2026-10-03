@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
+const HOST = process.env.HOST || undefined
+// Fixed peer port so it can be opened in the firewall (more peers, faster).
+const TORRENT_PORT = Number(process.env.TORRENT_PORT) || 0
 const DOWNLOAD_DIR = path.resolve(process.env.DOWNLOAD_DIR || path.join(__dirname, 'downloads'))
 const PASSWORD = process.env.APP_PASSWORD || ''
 const STATE_FILE = path.join(DOWNLOAD_DIR, '.seedbox.json')
@@ -52,7 +55,7 @@ function log (level, msg) {
 const state = { torrents: [], downloadLimit: -1, uploadLimit: -1 }
 try { Object.assign(state, JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))) } catch {}
 
-const client = new WebTorrent({ maxConns: 300 })
+const client = new WebTorrent({ maxConns: 300, torrentPort: TORRENT_PORT })
 client.on('error', err => log('error', `Client: ${err.message}`))
 client.throttleDownload(state.downloadLimit)
 client.throttleUpload(state.uploadLimit)
@@ -417,7 +420,7 @@ function mimeFor (name) {
 app.use(express.static(PUBLIC_DIR, { maxAge: '1h' }))
 app.get('/{*splat}', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')))
 
-app.listen(PORT, () => log('info', `Server started on port ${PORT}, storing files in ${DOWNLOAD_DIR}`))
+app.listen(PORT, HOST, () => log('info', `Server started on port ${PORT}, storing files in ${DOWNLOAD_DIR}`))
 
 // Keep the server up if a single torrent misbehaves.
 process.on('uncaughtException', err => log('error', `Uncaught: ${err.message}`))

@@ -35,8 +35,43 @@ For UI development, run `npm run dev` here and `npm run dev --prefix web` in a s
 | `PORT`         | `3000`         | HTTP port                                   |
 | `DOWNLOAD_DIR` | `./downloads`  | Where files are stored (mount a volume)     |
 | `APP_PASSWORD` | *(none)*       | Login password (strongly advised)           |
+| `HOST`         | all interfaces | Bind address (`127.0.0.1` behind a proxy)   |
+| `TORRENT_PORT` | random         | Fixed peer port to open in the firewall     |
 
 Changing `APP_PASSWORD` invalidates every shared link and every login session.
+
+## Free hosting with 200 GB (Oracle Cloud Always Free)
+
+Oracle's Always Free tier includes a VM and **200 GB of disk** at no cost. It doesn't expire. Signing up needs a card for identity verification, but you aren't charged as long as you stay within the free limits.
+
+1. **Sign up** at <https://signup.cloud.oracle.com>. Pick a home region close to you; you can't change it later.
+2. **Create a VM.** Go to Compute → Instances → Create instance.
+   - **Image:** Canonical Ubuntu 24.04.
+   - **Shape:** Ampere `VM.Standard.A1.Flex`, with as many OCPUs and as much RAM as the free tier allows.
+     - If you get "out of capacity", try again later or pick another availability domain.
+     - `VM.Standard.E2.1.Micro` also works, but it has only 1 GB of RAM.
+   - **Boot volume:** tick *Specify a custom boot volume size* and enter **200** GB.
+   - **SSH key:** you can download the generated key. You only need it to log in to the server, which is optional.
+   - **Initialization script:** open *Show advanced options* → *Management* → *Paste cloud-init script*, then paste the script below with your own password. The password needs at least 8 characters and no quotes, `\`, `$`, backticks or spaces.
+
+     ```bash
+     #!/bin/bash
+     export APP_PASSWORD='pick-a-strong-password'
+     curl -fsSL https://raw.githubusercontent.com/deburgermaster-afk/youga/seedbox/seedbox/deploy/oracle-install.sh | bash
+     ```
+3. **Open the ports.** Go to Networking → Virtual cloud networks → your VCN → Security Lists → Default → Add Ingress Rules. Use source `0.0.0.0/0` for each rule:
+   - TCP port `80`
+   - TCP port `443`
+   - TCP port `6881`
+   - UDP port `6881`
+4. Wait about 10 minutes for the install to finish. Then open `https://<public-ip-with-dashes>.sslip.io`.
+   - Example: for IP `140.238.1.2`, open `https://140-238-1-2.sslip.io`.
+   - The public IP is shown on the instance's page.
+   - If the address doesn't load, the install log is at `/var/log/seedbox-install.log` on the server.
+
+To update the app later, SSH in and run `sudo seedbox-update`.
+
+Oracle may reclaim Always Free VMs that stay idle (very low CPU, network and memory use) for 7 days. Upgrading the account to Pay As You Go prevents that. Anything within the free limits is still free.
 
 ## Deploy on Railway
 
