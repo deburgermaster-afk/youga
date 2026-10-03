@@ -1,0 +1,15 @@
+{
+  "name": "cloudbox",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm ci --prefix web && npm run build --prefix web",
+    "dev": "wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261003.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.147.0"
+  }
+}
