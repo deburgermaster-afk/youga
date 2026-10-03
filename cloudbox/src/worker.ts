@@ -243,7 +243,11 @@ type Movie = {
   addedBy?: string
   files: MovieFile[]
   pending?: string[] // job ids still downloading
+  ratings?: Record<string, number> // personal rating (1-10) per profile
+  watches?: { by: string; t: number }[] // who watched it and when
 }
+
+const PROFILE_ID = /^[a-z0-9]{1,16}$/
 
 async function readLibrary(env: Env): Promise<Movie[]> {
   const o = await env.BUCKET.get(LIBRARY)
@@ -307,7 +311,7 @@ async function movieDetail(env: Env, id: number) {
     imdb_id?: string; runtime?: number; tagline?: string; genres?: { name: string }[]; vote_count?: number
     production_countries?: { iso_3166_1: string; name: string }[]
     credits?: { cast?: { name: string; character: string; profile_path?: string }[]; crew?: { job: string; name: string }[] }
-    videos?: { results?: { key: string; name: string; site: string; type: string }[] }
+    videos?: { results?: { key: string; name: string; site: string; type: string; official?: boolean }[] }
     similar?: { results?: TmdbLite[] }
     release_dates?: { results?: { iso_3166_1: string; release_dates: { certification: string }[] }[] }
   }
@@ -324,7 +328,13 @@ async function movieDetail(env: Env, id: number) {
     certification: cert,
     director: d.credits?.crew?.find(c => c.job === 'Director')?.name || '',
     cast: (d.credits?.cast || []).slice(0, 15).map(c => ({ name: c.name, character: c.character, profile: c.profile_path || '' })),
-    trailers: (d.videos?.results || []).filter(v => v.site === 'YouTube' && /Trailer|Teaser/.test(v.type)).slice(0, 4).map(v => ({ key: v.key, name: v.name })),
+    // Official trailers first; the page autoplays the first one.
+    trailers: (d.videos?.results || [])
+      .filter(v => v.site === 'YouTube' && /Trailer|Teaser/.test(v.type))
+      .map((v, i) => ({ v, score: (v.type === 'Trailer' ? 2 : 0) + (v.official ? 1 : 0), i }))
+      .sort((a, b) => b.score - a.score || a.i - b.i)
+      .slice(0, 6)
+      .map(({ v }) => ({ key: v.key, name: v.name })),
     similar: (d.similar?.results || []).slice(0, 15).map(lite),
   }
 }
@@ -759,7 +769,7 @@ export default {
         })
         return json(next.find(m => m.id === d.id))
       }
-      const lib = /^\/api\/library\/(\d+)(\/attach|\/detach)?$/.exec(path)
+      const lib = /^\/api\/library\/(\d+)(\/attach|\/detach|\/rate|\/watched)?$/.exec(path)
       if (lib) {
         const id = Number(lib[1])
         if (req.method === 'DELETE' && !lib[2]) {
@@ -775,6 +785,37 @@ export default {
         if (req.method === 'POST' && lib[2] === '/detach') {
           const f = (await req.json().catch(() => ({}))) as MovieFile
           await updateLibrary(env, list => { const m = list.find(x => x.id === id); if (m) m.files = m.files.filter(x => !sameFile(x, f)) })
+          return json({ ok: true })
+        }
+        // Personal rating: 1-10 per profile; 0 clears it.
+        if (req.method === 'POST' && lib[2] === '/rate') {
+          const b = (await req.json().catch(() => ({}))) as { by?: string; value?: number }
+          const v = Math.round(Number(b.value))
+          if (!b.by || !PROFILE_ID.test(b.by) || !(v >= 0 && v <= 10)) return json({ error: 'Bad rating' }, 400)
+          let found = false
+          await updateLibrary(env, list => {
+            const m = list.find(x => x.id === id)
+            if (!m) return
+            found = true
+            const r = { ...m.ratings }
+            if (v) r[b.by!] = v
+            else delete r[b.by!]
+            m.ratings = r
+          })
+          return found ? json({ ok: true }) : json({ error: 'Not in your vault' }, 404)
+        }
+        // Watch log for the contributions calendar; one entry per person per 6 hours.
+        if (req.method === 'POST' && lib[2] === '/watched') {
+          const b = (await req.json().catch(() => ({}))) as { by?: string }
+          if (!b.by || !PROFILE_ID.test(b.by)) return json({ error: 'Bad profile' }, 400)
+          const now = Date.now()
+          await updateLibrary(env, list => {
+            const m = list.find(x => x.id === id)
+            if (!m) return
+            const w = (m.watches || []).filter(x => !(x.by === b.by && now - x.t < 6 * 3600_000))
+            w.push({ by: b.by!, t: now })
+            m.watches = w.slice(-100)
+          })
           return json({ ok: true })
         }
       }

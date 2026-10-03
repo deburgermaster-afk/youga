@@ -94,11 +94,18 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
     try {
       if (movie) await ensureInVault(movie)
       const job = await api.add(l, movie?.id)
-      toast.success(movie ? `Downloading ${movie.title}` : 'Download started', { description: job.name })
+      toast.success(movie ? `Adding ${movie.title}` : 'Adding movie', { description: job.name })
       onDone(); onOpenChange(false)
     } catch (e) {
       toast.error((e as Error).message)
     }
+    setBusy(false)
+  }
+
+  const saveOnly = async () => {
+    if (!movie) return
+    setBusy(true)
+    try { await ensureInVault(movie); toast.success(`Saved ${movie.title}`); onDone(); onOpenChange(false) } catch (e) { toast.error((e as Error).message) }
     setBusy(false)
   }
 
@@ -146,7 +153,7 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
   )
 
   return (
-    <Panel open={open} onOpenChange={onOpenChange} title={movieId && movie ? `Add file: ${movie.title}` : 'Add a movie'} description="Paste a magnet or download link you have the rights to.">
+    <Panel open={open} onOpenChange={onOpenChange} title={movieId && movie ? `Add movie: ${movie.title}` : 'Add a movie'} description="Paste a magnet or download link you have the rights to.">
       <Tabs defaultValue="link" onValueChange={v => v === 'existing' && loadExisting()} className="gap-4">
         <TabsList className="w-full">
           <TabsTrigger value="link">Link</TabsTrigger>
@@ -160,8 +167,11 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
             </Field>
             {moviePicker}
             <Button className="h-12 rounded-full bg-gradient-to-r from-orange-600 to-amber-500 text-base font-semibold text-white" disabled={busy || !isLink(link.trim())} onClick={start}>
-              {busy && <Spinner />} Start download
+              {busy && <Spinner />} Add movie
             </Button>
+            {movie && !library.some(x => x.id === movie.id) && (
+              <button disabled={busy} onClick={saveOnly} className="text-sm text-white/60 underline underline-offset-4">Just save it to the vault for now</button>
+            )}
           </FieldGroup>
         </TabsContent>
         <TabsContent value="existing">

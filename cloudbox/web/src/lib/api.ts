@@ -42,6 +42,7 @@ export type MovieFile = { source: 'torbox' | 'cloud'; torrentId?: number; fileId
 export type Movie = {
   id: number; imdbId?: string; title: string; year?: string; poster?: string; backdrop?: string; rating?: number; runtime?: number
   genres?: string[]; overview?: string; addedAt: number; addedBy?: string; files: MovieFile[]; pending?: string[]
+  ratings?: Record<string, number>; watches?: { by: string; t: number }[]
 }
 
 const IMG = 'https://image.tmdb.org/t/p/'
@@ -77,6 +78,8 @@ export const api = {
   removeMovie: (id: number) => req(`/api/library/${id}`, { method: 'DELETE' }),
   attach: (id: number, f: MovieFile) => req(`/api/library/${id}/attach`, post(f)),
   detach: (id: number, f: MovieFile) => req(`/api/library/${id}/detach`, post(f)),
+  rate: (id: number, by: string, value: number) => req(`/api/library/${id}/rate`, post({ by, value })),
+  watched: (id: number, by: string) => req(`/api/library/${id}/watched`, post({ by })),
   search: (q: string) => req<{ results: MovieLite[] }>(`/api/tmdb/search?q=${encodeURIComponent(q)}`),
   trending: () => req<{ results: MovieLite[] }>('/api/tmdb/trending'),
   movie: (id: number) => req<MovieDetail>(`/api/tmdb/movie/${id}`),

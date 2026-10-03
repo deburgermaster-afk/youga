@@ -4,8 +4,11 @@ import { cn } from '@/lib/utils'
 export function ProfilesPage({ onPick }: { onPick: (id: ProfileId) => void }) {
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center px-6 pb-10">
-      <h1 className="mb-2 text-xs font-semibold uppercase tracking-[0.3em] text-orange-400/90">Seedbox</h1>
-      <h2 className="mb-10 text-3xl font-bold tracking-tight">Who’s watching?</h2>
+      <h1 className="mb-3 flex items-baseline gap-1">
+        <span className="font-display text-xl font-extrabold tracking-[-0.04em] text-white/90">Seedbox</span>
+        <span className="size-1.5 rounded-full bg-orange-500 shadow-[0_0_12px_rgba(249,115,22,0.9)]" />
+      </h1>
+      <h2 className="mb-10 font-display text-[34px] font-extrabold tracking-[-0.035em]">Who’s watching?</h2>
       <div className="grid grid-cols-3 gap-5 sm:gap-8">
         {PROFILES.map((p, i) => (
           <button
@@ -15,7 +18,7 @@ export function ProfilesPage({ onPick }: { onPick: (id: ProfileId) => void }) {
             style={{ animationDelay: `${i * 90}ms` }}
           >
             <span className={cn(
-              'flex size-24 items-center justify-center rounded-3xl bg-gradient-to-br text-3xl font-black text-white shadow-[0_12px_40px_rgba(249,115,22,0.35)] ring-2 ring-transparent transition-all duration-300 group-hover:scale-105 group-hover:ring-white group-active:scale-95 sm:size-32 sm:text-4xl',
+              'flex size-24 items-center justify-center rounded-[28px] bg-gradient-to-br font-display text-4xl font-extrabold text-white shadow-[0_12px_40px_rgba(249,115,22,0.35)] ring-2 ring-transparent transition-all duration-300 group-hover:scale-105 group-hover:ring-white group-active:scale-95 sm:size-32 sm:text-4xl',
               p.color,
             )}>
               {p.name[0]}

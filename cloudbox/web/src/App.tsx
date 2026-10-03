@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Settings2 } from 'lucide-react'
 import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
 import { Player } from '@/components/player'
 import { GlowBackground } from '@/components/glow-bg'
 import { Dock, type Page } from '@/components/dock'
 import { AddSheet } from '@/components/add-sheet'
+import { RateSheet, type RateTarget } from '@/components/rate-sheet'
 import { HomePage } from '@/pages/home'
 import { SearchPage } from '@/pages/search'
+import { TimelinePage } from '@/pages/timeline'
+import { ContributionsPage } from '@/pages/contributions'
 import { MoviePage } from '@/pages/movie'
 import { FilesPage } from '@/pages/files'
 import { SettingsPage } from '@/pages/settings'
@@ -31,6 +34,7 @@ export default function App() {
   const [overlay, setOverlayState] = useState<Overlay>(null)
   const [add, setAdd] = useState<{ open: boolean; movieId?: number }>({ open: false })
   const [library, setLibrary] = useState<Movie[] | null>(null)
+  const [rating, setRating] = useState<RateTarget | null>(null)
   const { jobs, refresh } = useJobs(!!auth?.ok && !!profile)
 
   useEffect(() => {
@@ -62,7 +66,12 @@ export default function App() {
   const closeOverlay = () => (history.state?.overlay ? history.back() : setOverlayState(null))
 
   const setPrefs = useCallback((p: Prefs) => { setPrefsState(p); savePrefs(p) }, [])
-  const ctx = useMemo(() => ({ prefs, setPrefs, play: setMedia, profile: profile || 'tj' }), [prefs, setPrefs, profile])
+  // Playing a vault movie logs it for the contributions calendar.
+  const play = useCallback((m: Media) => {
+    setMedia(m)
+    if (m.movieId && profile) api.watched(m.movieId, profile).then(loadLibrary).catch(() => {})
+  }, [profile, loadLibrary])
+  const ctx = useMemo(() => ({ prefs, setPrefs, play, profile: profile || 'tj', rate: setRating, playing: !!media }), [prefs, setPrefs, play, profile, media])
 
   if (!auth) return <div className="flex min-h-dvh items-center justify-center bg-[#07070a]"><Spinner className="size-6" /></div>
   if (!auth.ok) {
@@ -114,20 +123,30 @@ export default function App() {
         </div>
       ) : (
         <>
-          <header className="sticky top-0 z-30 bg-gradient-to-b from-[#07070a] via-[#07070a]/80 to-transparent pt-[env(safe-area-inset-top)]">
-            <div className="flex h-16 items-center justify-between px-5">
-              <h1 className="bg-gradient-to-r from-white to-orange-200 bg-clip-text text-2xl font-black tracking-tight text-transparent">Seedbox</h1>
-              <button onClick={switchProfile} aria-label={`Watching as ${me.name}. Switch profile`} className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 py-1 pr-3 pl-1 backdrop-blur">
-                <span className={cn('flex size-8 items-center justify-center rounded-full bg-gradient-to-br text-sm font-black', me.color)}>{me.name[0]}</span>
-                <span className="text-xs font-semibold">{me.name}</span>
+          <header className="sticky top-0 z-30 pt-[env(safe-area-inset-top)]">
+            <div aria-hidden className="absolute inset-0 bg-[#07070a]/75 backdrop-blur-xl [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" />
+            <div className="relative flex h-[60px] items-center justify-between px-4">
+              <button onClick={() => goto('home')} className="flex items-baseline gap-1" aria-label="Seedbox home">
+                <span className="font-display bg-gradient-to-b from-white via-white to-orange-100/80 bg-clip-text text-[30px] leading-none font-extrabold tracking-[-0.05em] text-transparent">Seedbox</span>
+                <span className="size-2 rounded-full bg-orange-500 shadow-[0_0_14px_rgba(249,115,22,0.9)]" />
               </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => goto('settings')} aria-label="Settings" className={cn('glass flex size-10 items-center justify-center rounded-full transition-colors', page === 'settings' && 'bg-white/20')}>
+                  <Settings2 className="size-[18px]" />
+                </button>
+                <button onClick={switchProfile} aria-label={`Watching as ${me.name}. Switch profile`} className={cn('flex size-10 items-center justify-center rounded-full bg-gradient-to-br font-display text-[15px] font-extrabold ring-2 ring-white/15', me.color)}>
+                  {me.name[0]}
+                </button>
+              </div>
             </div>
           </header>
-          <main className="pt-2 animate-in fade-in-0 duration-300" key={page}>
+          <main className="pt-1 animate-in fade-in-0 duration-300" key={page}>
             {page === 'home' && (
               <HomePage library={library} jobs={jobs} refresh={() => { refresh(); loadLibrary() }} onOpen={openMovie} onSearch={() => goto('search')} onAdd={() => setAdd({ open: true })} />
             )}
-            {page === 'search' && <SearchPage library={library ?? []} onOpen={openMovie} onSettings={() => goto('settings')} />}
+            {page === 'timeline' && <TimelinePage library={library} onOpen={openMovie} />}
+            {page === 'contributions' && <ContributionsPage library={library} onOpen={openMovie} />}
+            {page === 'search' && <SearchPage library={library ?? []} jobs={jobs ?? []} onOpen={openMovie} onAdd={movieId => setAdd({ open: true, movieId })} onSettings={() => goto('settings')} />}
             {page === 'settings' && (
               <SettingsPage
                 authRequired={auth.required}
@@ -143,6 +162,7 @@ export default function App() {
 
       <Dock page={page} onPage={goto} onAdd={() => setAdd({ open: true, movieId: overlay?.type === 'movie' ? overlay.id : undefined })} badge={active} />
       <AddSheet open={add.open} onOpenChange={o => setAdd(a => ({ ...a, open: o }))} movieId={add.movieId} library={library ?? []} onDone={() => { refresh(); loadLibrary() }} />
+      <RateSheet target={rating} library={library ?? []} onClose={() => setRating(null)} onChanged={loadLibrary} />
       <Player media={media} onClose={() => setMedia(null)} />
       <Toaster theme="dark" position="top-center" />
     </AppContext.Provider>

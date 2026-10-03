@@ -104,7 +104,7 @@ export function SettingsPage({ authRequired, onLogout, onSwitchProfile, onFiles,
   const players = playersFor(plat)
 
   return (
-    <div className="mx-auto grid w-full max-w-3xl gap-3 px-5 pb-40">
+    <div className="mx-auto grid w-full max-w-3xl gap-3 px-4 pb-32">
       <Card className="py-4">
         <CardHeader className="px-4">
           <CardTitle>Watching as {profileName}</CardTitle>

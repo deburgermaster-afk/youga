@@ -1,20 +1,28 @@
-import { Play, Plus, Search } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { Plus, Search } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Poster } from '@/components/poster'
+import { MetaLine, Poster } from '@/components/poster'
 import { JobRow } from '@/components/job-row'
-import { img, type Job, type Movie } from '@/lib/api'
+import type { Job, Movie } from '@/lib/api'
 import { getProgress } from '@/lib/profiles'
 import { useApp } from '@/lib/app-context'
+import { kind, pr, prText } from '@/lib/movie'
 
-function Row({ title, children }: { title: string; children: React.ReactNode }) {
+export function Section({ title, aside, children }: { title: React.ReactNode; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="space-y-3">
-      <h2 className="px-5 text-lg font-bold tracking-tight">{title}</h2>
+    <section className="space-y-2.5">
+      <div className="flex items-baseline justify-between px-4">
+        <h2 className="font-display text-[19px] font-bold tracking-tight">{title}</h2>
+        {aside && <span className="text-xs text-white/45">{aside}</span>}
+      </div>
       {children}
     </section>
   )
+}
+
+export function StatusBadge({ m }: { m: Movie }) {
+  if (m.pending?.length) return <span className="rounded-full bg-blue-500/90 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur">Downloading</span>
+  if (!m.files.length) return <span className="glass-dark rounded-full px-2 py-0.5 text-[10px] font-medium text-white/90">No file</span>
+  return null
 }
 
 export function HomePage({ library, jobs, refresh, onOpen, onSearch, onAdd }: {
@@ -25,94 +33,74 @@ export function HomePage({ library, jobs, refresh, onOpen, onSearch, onAdd }: {
   onSearch: () => void
   onAdd: () => void
 }) {
-  const { profile, play } = useApp()
+  const { profile, play, rate } = useApp()
   const working = jobs?.filter(j => j.status !== 'done') ?? []
-  const progress = getProgress(profile)
-  const continueRows = progress
+  const continueRows = getProgress(profile)
     .map(p => ({ p, m: library?.find(m => m.id === p.movieId) }))
     .filter(x => x.m || !x.p.movieId)
     .slice(0, 12)
-  const hero = library?.find(m => m.backdrop && m.files.length) || library?.[0]
 
   if (library === null) {
     return (
-      <div className="space-y-6 px-5 pt-2">
-        <Skeleton className="h-56 w-full rounded-3xl" />
-        <div className="grid grid-cols-3 gap-3">{[0, 1, 2].map(i => <Skeleton key={i} className="aspect-[2/3] rounded-xl" />)}</div>
+      <div className="grid grid-cols-2 gap-3 px-4 pt-2">
+        {[0, 1, 2, 3].map(i => <Skeleton key={i} className="aspect-[2/3] rounded-[20px]" />)}
       </div>
     )
   }
 
   return (
-    <div className="space-y-8 pb-40">
-      {/* Featured */}
-      {hero ? (
-        <button onClick={() => onOpen(hero.id)} className="group relative mx-5 block h-60 w-[calc(100%-2.5rem)] overflow-hidden rounded-3xl text-left ring-1 ring-white/10 sm:h-80">
-          <img src={img(hero.backdrop || hero.poster, 'w1280')} alt="" className="absolute inset-0 size-full object-cover transition-transform duration-700 group-hover:scale-105" />
-          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
-          <div className="absolute inset-x-0 bottom-0 space-y-2 p-5">
-            <Badge className="bg-orange-500/90 text-white">{hero.files.length ? 'Ready to watch' : 'In your vault'}</Badge>
-            <h2 className="text-2xl leading-tight font-bold">{hero.title}</h2>
-            <p className="line-clamp-2 text-sm text-white/70">{hero.overview}</p>
-          </div>
-          {hero.files.length > 0 && (
-            <span className="absolute right-5 bottom-5 flex size-14 items-center justify-center rounded-full bg-gradient-to-br from-orange-500 to-amber-500 shadow-[0_8px_30px_rgba(249,115,22,0.5)]">
-              <Play className="size-6 fill-white text-white" />
-            </span>
-          )}
-        </button>
-      ) : (
-        <div className="mx-5 space-y-4 rounded-3xl border border-white/10 bg-white/[0.04] p-6 text-center backdrop-blur">
-          <h2 className="text-xl font-bold">Your vault is empty</h2>
-          <p className="text-sm text-white/60">Search for a movie to add it, then attach a file with the + button.</p>
-          <div className="flex justify-center gap-2">
-            <Button onClick={onSearch} className="rounded-full bg-gradient-to-r from-orange-600 to-amber-500 text-white"><Search /> Search movies</Button>
-            <Button onClick={onAdd} variant="outline" className="rounded-full border-white/20 bg-transparent"><Plus /> Add file</Button>
-          </div>
-        </div>
-      )}
-
+    <div className="space-y-6 pb-32">
       {continueRows.length > 0 && (
-        <Row title="Continue watching">
-          <div className="scrollbar-none flex gap-3 overflow-x-auto px-5">
+        <Section title="Continue watching">
+          <div className="scrollbar-none flex gap-2.5 overflow-x-auto px-4">
             {continueRows.map(({ p, m }) => (
               <Poster
                 key={p.url}
-                className="w-28 shrink-0"
+                className="w-[104px] shrink-0"
                 title={m?.title || p.name}
                 poster={m?.poster}
                 progress={p.d ? p.t / p.d : 0}
+                sub={p.d ? `${Math.max(1, Math.round((p.d - p.t) / 60))} min left` : undefined}
                 onClick={() => (m ? onOpen(m.id) : play({ url: p.url, name: p.name }))}
               />
             ))}
           </div>
-        </Row>
+        </Section>
       )}
 
       {working.length > 0 && (
-        <Row title="Downloading">
-          <div className="space-y-3 px-5">{working.map(j => <JobRow key={j.id} job={j} onChange={refresh} />)}</div>
-        </Row>
+        <Section title="Downloading">
+          <div className="space-y-2 px-4">{working.map(j => <JobRow key={j.id} job={j} onChange={refresh} />)}</div>
+        </Section>
       )}
 
-      {library.length > 0 && (
-        <Row title="Your vault">
-          <div className="grid grid-cols-3 gap-3 px-5 sm:grid-cols-5 lg:grid-cols-7">
+      {library.length > 0 ? (
+        <Section title="Your vault" aside={`${library.length} movie${library.length === 1 ? '' : 's'}`}>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
             {library.map(m => (
               <Poster
                 key={m.id}
+                big
                 title={m.title}
                 poster={m.poster}
-                year={m.year}
-                rating={m.rating}
+                sub={<MetaLine parts={[kind(m.genres), m.year]} pr={prText(pr(m))} />}
                 onClick={() => onOpen(m.id)}
-                badge={m.pending?.length
-                  ? <Badge className="bg-blue-500 text-white">Downloading</Badge>
-                  : !m.files.length ? <Badge variant="secondary" className="bg-black/60">No file</Badge> : undefined}
+                onRate={() => rate({ id: m.id, title: m.title, poster: m.poster })}
+                rated={!!m.ratings?.[profile]}
+                badge={<StatusBadge m={m} />}
               />
             ))}
           </div>
-        </Row>
+        </Section>
+      ) : (
+        <div className="glass mx-4 space-y-3 rounded-3xl p-5 text-center">
+          <h2 className="font-display text-xl font-bold">Your vault is empty</h2>
+          <p className="text-sm text-white/60">Search for a movie, then add it with a link.</p>
+          <div className="flex justify-center gap-2">
+            <button onClick={onSearch} className="flex h-10 items-center gap-1.5 rounded-full bg-gradient-to-r from-orange-600 to-amber-500 px-4 text-sm font-semibold"><Search className="size-4" /> Search movies</button>
+            <button onClick={onAdd} className="glass flex h-10 items-center gap-1.5 rounded-full px-4 text-sm font-semibold"><Plus className="size-4" /> Add movie</button>
+          </div>
+        </div>
       )}
     </div>
   )
