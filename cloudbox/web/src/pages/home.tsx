@@ -155,7 +155,7 @@ function JobRow({ job, onChange }: { job: Job; onChange: () => void }) {
   )
 }
 
-export function HomePage({ jobs, refresh, onViewAll }: { jobs: Job[] | null; refresh: () => void; onViewAll: () => void }) {
+export function HomePage({ jobs, refresh }: { jobs: Job[] | null; refresh: () => void }) {
   const [files, setFiles] = useState<Entry[] | null>(null)
   const doneCount = jobs?.filter(j => j.status === 'done').length ?? 0
 
@@ -193,9 +193,6 @@ export function HomePage({ jobs, refresh, onViewAll }: { jobs: Job[] | null; ref
         <section className="space-y-2">
           <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Latest files</h2>
           {recent.map(f => <FileRow key={f.path} f={f} />)}
-          <Button variant="outline" className="mt-1 h-11 w-full" onClick={onViewAll}>
-            View all files{files!.length > 8 ? ` (${files!.length})` : ''}
-          </Button>
         </section>
       )}
     </div>

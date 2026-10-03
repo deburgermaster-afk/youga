@@ -94,7 +94,7 @@ export default function App() {
 
         <main className="w-full px-4 pt-4 pb-[calc(7rem+env(safe-area-inset-bottom))] md:px-6 md:pb-10">
           <TabsContent value="home" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
-            <HomePage jobs={jobs} refresh={refresh} onViewAll={() => goto('files')} />
+            <HomePage jobs={jobs} refresh={refresh} />
           </TabsContent>
           <TabsContent value="files" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
             <FilesPage />
