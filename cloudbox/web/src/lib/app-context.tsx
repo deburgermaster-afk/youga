@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { Prefs } from '@/lib/links'
 
-export type Media = { url: string; name: string }
+export type Media = { url: string; name: string; subs?: { name: string; url: string }[] }
 
 export type AppCtx = {
   prefs: Prefs

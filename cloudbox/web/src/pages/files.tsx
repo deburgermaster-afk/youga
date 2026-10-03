@@ -117,7 +117,7 @@ export function FilesPage() {
             </ItemActions>
           </Item>
         ) : (
-          <FileRow key={e.path} f={e} onDelete={() => setDel(e)} />
+          <FileRow key={e.path} f={e} siblings={entries ?? []} onDelete={() => setDel(e)} />
         ))}
       </ItemGroup>
 

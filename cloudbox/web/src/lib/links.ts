@@ -77,7 +77,7 @@ export type Prefs = { player: string; autoOpen: boolean }
 
 const KEY = 'seedbox:prefs'
 export function loadPrefs(): Prefs {
-  const def: Prefs = { player: '', autoOpen: platform() !== 'desktop' }
+  const def: Prefs = { player: '', autoOpen: false }
   try {
     return { ...def, ...JSON.parse(localStorage.getItem(KEY) || '{}') }
   } catch {

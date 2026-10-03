@@ -195,7 +195,7 @@ export function HomePage({ jobs, refresh }: { jobs: Job[] | null; refresh: () =>
       {recent.length > 0 && (
         <section className="space-y-2">
           <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Latest files</h2>
-          {recent.map(f => <FileRow key={f.path} f={f} />)}
+          {recent.map(f => <FileRow key={f.path} f={f} siblings={files!} />)}
         </section>
       )}
     </div>

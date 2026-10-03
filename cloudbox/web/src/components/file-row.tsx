@@ -6,13 +6,22 @@ import { absolute, copy, openInApp, platform, preferredPlayer } from '@/lib/link
 import { useApp } from '@/lib/app-context'
 
 // Compact one-line file row with icon actions on the right.
-export function FileRow({ f, onDelete }: { f: Entry; onDelete?: () => void }) {
+// Subtitle files from the same torrent (TorBox) or the same folder (Cloud).
+export function subtitlesFor(f: Entry, all: Entry[]) {
+  const dir = (p: string) => p.slice(0, p.lastIndexOf('/') + 1)
+  return all
+    .filter(e => e !== f && e.url && /\.(srt|vtt)$/i.test(e.name))
+    .filter(e => (f.source === 'torbox' ? e.torrentId === f.torrentId : e.source !== 'torbox' && dir(e.path) === dir(f.path)))
+    .map(e => ({ name: e.name, url: e.url! }))
+}
+
+export function FileRow({ f, onDelete, siblings = [] }: { f: Entry; onDelete?: () => void; siblings?: Entry[] }) {
   const { prefs, play } = useApp()
   const url = f.url!
   const playable = isMedia(f.name) || isImage(f.name)
   const onPlay = () => {
     if (isVideo(f.name) && prefs.autoOpen && platform() !== 'desktop') openInApp(preferredPlayer(prefs), url, f.name)
-    else play({ url, name: f.name })
+    else play({ url, name: f.name, subs: subtitlesFor(f, siblings) })
   }
   return (
     <div className="flex items-center gap-2 rounded-xl border bg-card/60 py-1.5 pr-1.5 pl-3 animate-in fade-in-0 duration-300">
