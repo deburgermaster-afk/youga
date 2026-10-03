@@ -161,11 +161,14 @@ export function HomePage({ jobs, refresh }: { jobs: Job[] | null; refresh: () =>
 
   // Reload recent files whenever a copy finishes.
   useEffect(() => {
-    api.files('').then(r => setFiles(r.entries.filter(e => !e.isDir).sort((a, b) => b.mtime - a.mtime))).catch(() => setFiles([]))
+    Promise.all([
+      api.torboxFiles().then(r => r.entries).catch(() => [] as Entry[]),
+      api.files('').then(r => r.entries.filter(e => !e.isDir).map(e => ({ ...e, source: 'cloud' as const }))).catch(() => [] as Entry[]),
+    ]).then(([tb, cloud]) => setFiles([...tb, ...cloud].sort((a, b) => b.mtime - a.mtime)))
   }, [doneCount])
 
   const working = jobs?.filter(j => j.status !== 'done') ?? []
-  const recent = files?.slice(0, 8) ?? []
+  const recent = files?.slice(0, 12) ?? []
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5">

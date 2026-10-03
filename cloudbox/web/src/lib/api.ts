@@ -25,6 +25,10 @@ export type Entry = {
   size: number
   mtime: number
   url: string | null
+  source?: 'torbox' | 'cloud'
+  torrentId?: number
+  fileId?: number
+  torrentName?: string
 }
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
@@ -53,8 +57,11 @@ export const api = {
   pump: () => req('/api/pump', post()),
   files: (prefix: string) => req<{ prefix: string; entries: Entry[] }>(`/api/files?prefix=${encodeURIComponent(prefix)}`),
   removeFile: (key: string) => req(`/api/files?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
-  config: () => req<{ torbox: string }>('/api/config'),
-  saveConfig: (torboxKey: string) => req<{ torbox: string }>('/api/config', post({ torboxKey })),
+  config: () => req<{ torbox: string; copyToCloud: boolean }>('/api/config'),
+  saveConfig: (c: { torboxKey?: string; copyToCloud?: boolean }) => req<{ torbox: string; copyToCloud: boolean }>('/api/config', post(c)),
+  torboxFiles: () => req<{ entries: Entry[] }>('/api/torbox/files'),
+  torboxDelete: (torrentId: number) => req(`/api/torbox/${torrentId}`, { method: 'DELETE' }),
+  saveToCloud: (e: Entry) => req('/api/torbox/save', post({ torrentId: e.torrentId, fileId: e.fileId, name: e.name, size: e.size, torrentName: e.torrentName })),
   usage: () => req<{ bytes: number; count: number }>('/api/usage'),
 }
 

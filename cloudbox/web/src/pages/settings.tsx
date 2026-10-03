@@ -13,13 +13,14 @@ import { useApp } from '@/lib/app-context'
 
 function TorBoxCard() {
   const [saved, setSaved] = useState<string | null>(null)
+  const [copyToCloud, setCopyToCloud] = useState(false)
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
-  useEffect(() => { api.config().then(c => setSaved(c.torbox)).catch(() => setSaved('')) }, [])
+  useEffect(() => { api.config().then(c => { setSaved(c.torbox); setCopyToCloud(c.copyToCloud) }).catch(() => setSaved('')) }, [])
   const save = async (value: string) => {
     setBusy(true)
     try {
-      const c = await api.saveConfig(value)
+      const c = await api.saveConfig({ torboxKey: value })
       setSaved(c.torbox)
       setKey('')
       toast.success(value ? 'TorBox connected. Magnet links work now.' : 'TorBox disconnected')
@@ -33,8 +34,8 @@ function TorBoxCard() {
       <CardHeader className="px-4">
         <CardTitle>Magnet links (TorBox)</CardTitle>
         <CardDescription className="leading-relaxed">
-          Cloudflare can’t run torrents, so TorBox downloads them, then they’re copied into your cloud.
-          Free plan: 20 GB a month, files up to 1 GB. Get a key at torbox.app → Settings → API key.
+          TorBox is the download engine: paste a magnet and it downloads on TorBox’s servers, then plays here straight from TorBox.
+          Get your key at torbox.app → Settings → API key.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 px-4">
@@ -43,6 +44,18 @@ function TorBoxCard() {
           <Input value={key} onChange={e => setKey(e.target.value)} placeholder="Paste TorBox API key" className="h-11 font-mono" autoComplete="off" spellCheck={false} />
           <Button type="submit" className="h-11 px-4" disabled={busy || !key.trim()}>{busy ? <Spinner /> : 'Save'}</Button>
         </form>
+        {saved && (
+          <Field orientation="horizontal" className="pt-2">
+            <FieldContent>
+              <FieldLabel htmlFor="copy">Also save finished torrents to Cloudflare</FieldLabel>
+              <FieldDescription>Off: files play straight from TorBox (fastest). On: a permanent copy is also made in your Cloudflare storage (slower; uses R2 space).</FieldDescription>
+            </FieldContent>
+            <Switch id="copy" checked={copyToCloud} onCheckedChange={async v => {
+              setCopyToCloud(v)
+              try { await api.saveConfig({ copyToCloud: v }); toast.success(v ? 'Will save copies to Cloudflare' : 'Streaming from TorBox only') } catch (e) { toast.error((e as Error).message); setCopyToCloud(!v) }
+            }} />
+          </Field>
+        )}
         {saved && <Button variant="ghost" className="h-9 px-0 text-muted-foreground" onClick={() => save('')}>Disconnect</Button>}
       </CardContent>
     </Card>

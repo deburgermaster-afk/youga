@@ -12,10 +12,14 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/u
 import { Input } from '@/components/ui/input'
 import { Item, ItemActions, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { FileRow } from '@/components/file-row'
 import { api, bytes, type Entry } from '@/lib/api'
 
+type Source = 'torbox' | 'cloud'
+
 export function FilesPage() {
+  const [source, setSource] = useState<Source>('torbox')
   const [path, setPath] = useState('')
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [usage, setUsage] = useState<{ bytes: number; count: number } | null>(null)
@@ -24,12 +28,14 @@ export function FilesPage() {
 
   const load = useCallback(async (p: string) => {
     try {
-      setEntries((await api.files(p ? p + '/' : '')).entries)
+      setEntries(source === 'torbox'
+        ? (await api.torboxFiles()).entries.sort((a, b) => b.mtime - a.mtime)
+        : (await api.files(p ? p + '/' : '')).entries.map(e => ({ ...e, source: 'cloud' as const })))
     } catch (e) {
       toast.error((e as Error).message)
       setEntries([])
     }
-  }, [])
+  }, [source])
 
   useEffect(() => { load(path) }, [path, load])
   useEffect(() => { api.usage().then(setUsage).catch(() => {}) }, [entries])
@@ -39,7 +45,7 @@ export function FilesPage() {
   const remove = async () => {
     if (!del) return
     try {
-      await api.removeFile(del.path)
+      await (del.source === 'torbox' ? api.torboxDelete(del.torrentId!) : api.removeFile(del.path))
       toast.success('Deleted', { description: del.name })
       load(path)
     } catch (e) { toast.error((e as Error).message) }
@@ -51,14 +57,19 @@ export function FilesPage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-4">
-      <Card className="gap-1 py-4">
+      <ToggleGroup type="single" variant="outline" value={source} onValueChange={v => { if (v) { setSource(v as Source); setEntries(null); setPath(''); setQ('') } }} className="w-full">
+        <ToggleGroupItem value="torbox" className="h-11 flex-1 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">TorBox</ToggleGroupItem>
+        <ToggleGroupItem value="cloud" className="h-11 flex-1 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">Cloud</ToggleGroupItem>
+      </ToggleGroup>
+
+      {source === 'cloud' && <Card className="gap-1 py-4">
         <CardHeader className="px-4">
           <CardTitle>Your cloud</CardTitle>
           <CardDescription className="font-mono tabular-nums">
             {usage ? `${bytes(usage.bytes)} in ${usage.count} file${usage.count === 1 ? '' : 's'} · first 10 GB free` : 'Loading…'}
           </CardDescription>
         </CardHeader>
-      </Card>
+      </Card>}
 
       <div className="flex items-center gap-2">
         <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Search this folder" className="h-11" type="search" />
@@ -89,7 +100,7 @@ export function FilesPage() {
         <Empty className="border border-dashed py-14">
           <EmptyHeader>
             <EmptyTitle>No files</EmptyTitle>
-            <EmptyDescription>Finished copies show up here.</EmptyDescription>
+            <EmptyDescription>{source === 'torbox' ? 'Finished torrents show up here.' : 'Files saved to Cloudflare show up here.'}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}
@@ -113,8 +124,12 @@ export function FilesPage() {
       <AlertDialog open={!!del} onOpenChange={o => !o && setDel(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete from your cloud?</AlertDialogTitle>
-            <AlertDialogDescription className="break-all">{del?.name} ({bytes(del?.size ?? 0)}) will be permanently deleted.</AlertDialogDescription>
+            <AlertDialogTitle>{del?.source === 'torbox' ? 'Remove from TorBox?' : 'Delete from your cloud?'}</AlertDialogTitle>
+            <AlertDialogDescription className="break-all">
+              {del?.source === 'torbox'
+                ? `This removes the whole torrent “${del?.torrentName}” and all its files from TorBox.`
+                : `${del?.name} (${bytes(del?.size ?? 0)}) will be permanently deleted.`}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

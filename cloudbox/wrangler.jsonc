@@ -9,7 +9,7 @@
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/f/*"]
+    "run_worker_first": ["/api/*", "/f/*", "/tb/*"]
   },
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "seedbox-files" }],
   // Keeps copies moving while the app is closed.

@@ -46,7 +46,7 @@ const CONFIG = '.cloudbox/config.json'
 const TORBOX = 'https://api.torbox.app/v1/api'
 const isActive = (s: string) => s === 'queued' || s === 'copying' || s === 'remote'
 
-type Config = { torboxKey?: string }
+type Config = { torboxKey?: string; copyToCloud?: boolean }
 async function getConfig(env: Env): Promise<Config> {
   const o = await env.BUCKET.get(CONFIG)
   return o ? o.json() : {}
@@ -221,6 +221,69 @@ async function resolveUrl(env: Env, job: Job) {
   job.urlExpires = Date.now() + 2 * 60 * 60 * 1000
 }
 
+// Per-isolate cache of TorBox download links (they're valid for hours), so
+// seeking in a video doesn't call the TorBox API for every range request.
+const linkCache = new Map<string, { url: string; exp: number }>()
+async function torboxLink(key: string, torrentId: number, fileId: number) {
+  const id = `${torrentId}:${fileId}`
+  const hit = linkCache.get(id)
+  if (hit && hit.exp > Date.now()) return hit.url
+  const q = new URLSearchParams({ token: key, torrent_id: String(torrentId), file_id: String(fileId) })
+  const url = await torbox<string>(key, `/torrents/requestdl?${q}`)
+  if (!/^https?:\/\//.test(url || '')) throw new Error('TorBox did not return a download link')
+  linkCache.set(id, { url, exp: Date.now() + 60 * 60 * 1000 })
+  return url
+}
+
+type TbTorrent = { id: number; name: string; size: number; created_at?: string; updated_at?: string; download_finished: boolean; download_present: boolean; files?: { id: number; name: string; short_name?: string; size: number }[] }
+
+async function torboxFiles(env: Env) {
+  const { torboxKey } = await getConfig(env)
+  if (!torboxKey) return []
+  const list = await torbox<TbTorrent[]>(torboxKey, '/torrents/mylist?bypass_cache=true')
+  return (list || [])
+    .filter(t => (t.download_finished || t.download_present) && t.files?.length)
+    .flatMap(t => t.files!.map(f => {
+      const name = f.short_name || f.name.split('/').pop() || f.name
+      return {
+        name,
+        path: `tb:${t.id}:${f.id}`,
+        isDir: false,
+        size: f.size,
+        mtime: Date.parse(t.updated_at || t.created_at || '') || 0,
+        url: `/tb/${t.id}/${f.id}/${encodeURIComponent(name)}`,
+        source: 'torbox' as const,
+        torrentId: t.id,
+        fileId: f.id,
+        torrentName: t.name,
+      }
+    }))
+}
+
+// Relay a TorBox file through the Worker so the API key never reaches the
+// browser or a copied link. Range requests pass straight through.
+async function serveTorbox(req: Request, env: Env, torrentId: number, fileId: number, name: string) {
+  const { torboxKey } = await getConfig(env)
+  if (!torboxKey) return new Response('TorBox not connected', { status: 404 })
+  const link = await torboxLink(torboxKey, torrentId, fileId)
+  const fwd = new Headers()
+  for (const h of ['range', 'if-range', 'if-none-match', 'if-modified-since']) {
+    const v = req.headers.get(h)
+    if (v) fwd.set(h, v)
+  }
+  const up = await fetch(link, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', headers: fwd })
+  if (up.status >= 400) linkCache.delete(`${torrentId}:${fileId}`)
+  const headers = new Headers()
+  for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+    const v = up.headers.get(h)
+    if (v) headers.set(h, v)
+  }
+  if (!headers.get('content-type') || headers.get('content-type') === 'application/octet-stream') headers.set('content-type', mime(name))
+  headers.set('accept-ranges', 'bytes')
+  headers.set('content-disposition', `${new URL(req.url).searchParams.has('download') ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(name)}`)
+  return new Response(up.body, { status: up.status, headers })
+}
+
 async function createJob(env: Env, raw: string): Promise<Job> {
   if (isMagnet(raw)) return createMagnetJob(env, raw)
   let url: URL
@@ -302,8 +365,12 @@ async function step(env: Env, id: string, maxParts: number): Promise<boolean> {
       job.remoteStats = { down: t.download_speed || 0, up: t.upload_speed || 0, seeds: t.seeds || 0, peers: t.peers || 0, eta: t.eta || 0, ratio: t.ratio || 0 }
       if (/error|failed/i.test(t.download_state || '')) throw new Error(`TorBox: ${t.download_state}`)
       if ((t.download_finished || t.download_present) && t.files?.length) {
-        await spawnCopies(env, job, t.files)
-        job.children = t.files.length
+        // TorBox is the engine: files play straight from it. Copying into
+        // R2 is optional (permanent storage, but slower).
+        if ((await getConfig(env)).copyToCloud) {
+          await spawnCopies(env, job, t.files)
+          job.children = t.files.length
+        }
         job.remoteProgress = 1
         job.status = 'done'
       }
@@ -428,13 +495,41 @@ export default {
 
     if (path === '/api/logout') return json({ ok: true }, 200, { 'set-cookie': 'cb=; Path=/; Max-Age=0' })
 
-    if (path.startsWith('/api/') || path.startsWith('/f/')) {
+    if (path.startsWith('/api/') || path.startsWith('/f/') || path.startsWith('/tb/')) {
       if (!(await authed(req, env))) return json({ error: 'Login required' }, 401)
     } else {
       return env.ASSETS.fetch(req)
     }
 
     try {
+      const tb = /^\/tb\/(\d+)\/(\d+)(?:\/(.*))?$/.exec(path)
+      if (tb) return serveTorbox(req, env, Number(tb[1]), Number(tb[2]), decodeURIComponent(tb[3] || 'file'))
+
+      if (path === '/api/torbox/files' && req.method === 'GET') return json({ entries: await torboxFiles(env) })
+
+      const tbDel = /^\/api\/torbox\/(\d+)$/.exec(path)
+      if (tbDel && req.method === 'DELETE') {
+        const { torboxKey } = await getConfig(env)
+        if (!torboxKey) return json({ error: 'TorBox not connected' }, 400)
+        await torbox(torboxKey, '/torrents/controltorrent', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ torrent_id: Number(tbDel[1]), operation: 'delete' }),
+        })
+        return new Response(null, { status: 204 })
+      }
+
+      // Copy one TorBox file into R2 for permanent storage.
+      if (path === '/api/torbox/save' && req.method === 'POST') {
+        const b = (await req.json().catch(() => ({}))) as { torrentId?: number; fileId?: number; name?: string; size?: number; torrentName?: string }
+        if (b.torrentId === undefined || b.fileId === undefined || !b.name || !b.size) return json({ error: 'Missing file details' }, 400)
+        const parent = { torbox: { torrentId: b.torrentId } } as Job
+        const folder = b.torrentName && b.torrentName !== b.name ? `${b.torrentName}/` : ''
+        await spawnCopies(env, parent, [{ id: b.fileId, name: folder + b.name, size: b.size }])
+        ctx.waitUntil(pumpAll(env, Date.now() + 25_000, 1))
+        return json({ ok: true })
+      }
+
       if (path.startsWith('/f/')) {
         return serveFile(req, env, path.slice(3).split('/').map(decodeURIComponent).join('/'))
       }
@@ -507,19 +602,22 @@ export default {
         return new Response(null, { status: 204 })
       }
 
-      if (path === '/api/config' && req.method === 'GET') {
-        const c = await getConfig(env)
-        return json({ torbox: c.torboxKey ? '••••' + c.torboxKey.slice(-4) : '' })
-      }
+      const publicConfig = (c: Config) => ({ torbox: c.torboxKey ? '••••' + c.torboxKey.slice(-4) : '', copyToCloud: !!c.copyToCloud })
 
+      if (path === '/api/config' && req.method === 'GET') return json(publicConfig(await getConfig(env)))
+
+      // Only fields present in the body change.
       if (path === '/api/config' && req.method === 'POST') {
-        const { torboxKey } = (await req.json().catch(() => ({}))) as { torboxKey?: string }
-        const key = String(torboxKey || '').trim()
-        if (key) await torbox(key, '/user/me') // validates the key
+        const body = (await req.json().catch(() => ({}))) as { torboxKey?: string; copyToCloud?: boolean }
         const c = await getConfig(env)
-        c.torboxKey = key || undefined
+        if (body.torboxKey !== undefined) {
+          const key = String(body.torboxKey).trim()
+          if (key) await torbox(key, '/user/me') // validates the key
+          c.torboxKey = key || undefined
+        }
+        if (typeof body.copyToCloud === 'boolean') c.copyToCloud = body.copyToCloud
         await env.BUCKET.put(CONFIG, JSON.stringify(c))
-        return json({ torbox: key ? '••••' + key.slice(-4) : '' })
+        return json(publicConfig(c))
       }
 
       if (path === '/api/usage') {
