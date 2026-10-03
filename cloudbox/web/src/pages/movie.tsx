@@ -9,17 +9,19 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Poster } from '@/components/poster'
+import { Episodes } from '@/components/episodes'
 import { TrailerBackground } from '@/components/trailer'
 import { WideProgress } from '@/components/wide-progress'
 import { api, bytes, img, movieFileUrl, type Job, type Movie, type MovieDetail, type MovieFile } from '@/lib/api'
 import { absolute, copy, kmplayer, openInApp, platform, playersFor } from '@/lib/links'
 import { useApp } from '@/lib/app-context'
 import { kind, playMovie, pr, prText } from '@/lib/movie'
+import { episodeFiles, epLabel, nextEpisode, type EpFile } from '@/lib/episodes'
 import { cn } from '@/lib/utils'
 
 const hm = (min: number) => (!min ? '' : min < 60 ? `${min}m` : `${Math.floor(min / 60)}h ${min % 60}m`)
-const circle = 'glass flex size-10 items-center justify-center rounded-full'
-const onImage = 'glass-dark flex size-10 items-center justify-center rounded-full'
+const circle = 'btn-black flex size-10 items-center justify-center rounded-full'
+const onImage = 'btn-black flex size-10 items-center justify-center rounded-full !bg-black/55 backdrop-blur-md'
 
 export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onChanged }: {
   id: number
@@ -41,7 +43,10 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
   const [live, setLive] = useState(false)
   const [muted, setMuted] = useState(true)
   const entry = library.find(m => m.id === id)
-  const file = entry?.files[0]
+  const isTv = id < 0
+  const eps = isTv ? episodeFiles(entry?.files || []) : []
+  const upNext = isTv ? nextEpisode(profile, eps) : null
+  const file = isTv ? (upNext?.ep.f ?? entry?.files[0]) : entry?.files[0]
   const pending = jobs.filter(j => entry?.pending?.includes(j.id) && j.status !== 'done')
 
   useEffect(() => {
@@ -72,6 +77,17 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
     await playMovie(play, { id, title: t?.title || f.name }, f)
     setStarting(false)
   }
+  // An episode plays with the rest of the series queued after it.
+  const playEp = async (ep: EpFile) => {
+    setStarting(true)
+    const i = eps.indexOf(ep)
+    await playMovie(play, { id, title: t?.title || ep.f.name }, ep.f, {
+      ep: epLabel(ep.s, ep.e),
+      queue: eps.slice(i + 1).map(x => ({ f: x.f, ep: epLabel(x.s, x.e) })),
+    })
+    setStarting(false)
+  }
+  const playMain = () => (isTv && upNext ? playEp(upNext.ep) : file && playFile(file))
 
   const openKm = (f: MovieFile) => {
     const app = kmplayer()
@@ -134,7 +150,9 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
           <div className="min-w-0 flex-1">
             <h1 className="font-display text-[32px] leading-[1.02] font-extrabold tracking-[-0.035em] text-balance">{t?.title ?? <Skeleton className="h-8 w-2/3" />}</h1>
             <p className="mt-1.5 text-[13px] text-white/65">
-              {[genres?.slice(0, 2).join(', ') || kind(genres), t?.year, hm(runtime), d?.certification].filter(Boolean).join(' · ')}
+              {[isTv ? 'Series' : '', genres?.slice(0, 2).join(', ') || kind(genres), t?.year,
+                isTv ? (d?.seasons.filter(x => x.n > 0).length ? `${d.seasons.filter(x => x.n > 0).length} season${d.seasons.filter(x => x.n > 0).length > 1 ? 's' : ''}` : '') : hm(runtime),
+                d?.certification].filter(Boolean).join(' · ')}
             </p>
           </div>
           <button aria-label={entry ? 'Remove from vault' : 'Save to vault'} onClick={entry ? removeFromVault : addToVault} disabled={busy} className={cn(circle, 'size-11 shrink-0')}>
@@ -150,11 +168,13 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
             </span>
           )}
           {d?.imdbId && (
-            <a href={`https://www.imdb.com/title/${d.imdbId}/`} target="_blank" rel="noreferrer" className="flex h-8 items-center rounded-full bg-[#f5c518] px-3 text-[13px] font-black text-black">IMDb</a>
+            <a href={`https://www.imdb.com/title/${d.imdbId}/`} target="_blank" rel="noreferrer" className="flex h-8 items-center gap-1.5 rounded-full bg-[#f5c518] px-3 text-[13px] font-black text-black">
+              IMDb{!!d.imdbRating && <span className="font-bold">{d.imdbRating.toFixed(1)}</span>}
+            </a>
           )}
           <button
             onClick={() => t && rate({ id, title: t.title, poster: t.poster })}
-            className="flex h-8 items-center gap-1.5 rounded-full border border-orange-400/40 bg-orange-500/15 px-3 text-[13px] font-semibold text-orange-300"
+            className="btn-black flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold text-orange-300"
           >
             <Star className={cn('size-3.5', entry?.ratings?.[profile] ? 'fill-orange-400 text-orange-400' : '')} />
             PR {prText(score)}
@@ -166,20 +186,23 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
         {file ? (
           <div className="space-y-2">
             <div className="flex gap-2">
-              <button onClick={() => playFile(file)} className="flex h-12 flex-1 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-orange-600 to-amber-500 text-[15px] font-semibold shadow-[0_8px_28px_rgba(249,115,22,0.45)] active:scale-[0.98]">
-                {starting ? <Spinner /> : <Play className="size-5 fill-white" />} Play
+              <button onClick={playMain} className="btn-black flex h-12 flex-1 items-center justify-center gap-2 rounded-full text-[15px] font-semibold">
+                {starting ? <Spinner /> : <Play className="size-5 fill-orange-400 text-orange-400" />}
+                {isTv && upNext ? `${upNext.resume ? 'Resume' : 'Play'} ${epLabel(upNext.ep.s, upNext.ep.e)}` : 'Play'}
               </button>
-              <a href={absolute(movieFileUrl(file), true)} download className="glass flex h-12 items-center justify-center gap-2 rounded-full px-5 text-[15px] font-semibold">
-                <Download className="size-[18px]" /> Download
-              </a>
+              {isTv
+                ? <button onClick={() => onAddFile(id)} className="btn-black flex h-12 items-center justify-center gap-2 rounded-full px-5 text-[15px] font-semibold"><Plus className="size-[18px]" /> Episodes</button>
+                : <a href={absolute(movieFileUrl(file), true)} download className="btn-black flex h-12 items-center justify-center gap-2 rounded-full px-5 text-[15px] font-semibold">
+                    <Download className="size-[18px]" /> Download
+                  </a>}
             </div>
             <div className="flex gap-2">
-              <button className="glass flex h-10 flex-1 items-center justify-center gap-2 rounded-full text-[13px] font-medium" onClick={() => openKm(file)}>
+              <button className="btn-black flex h-10 flex-1 items-center justify-center gap-2 rounded-full text-[13px] font-medium" onClick={() => openKm(file)}>
                 <ExternalLink className="size-4" /> Open in KMPlayer
               </button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <button className="glass h-10 rounded-full px-4 text-[13px] font-medium">Other apps</button>
+                  <button className="btn-black h-10 rounded-full px-4 text-[13px] font-medium">Other apps</button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52">
                   <DropdownMenuLabel>Open in</DropdownMenuLabel>
@@ -201,11 +224,11 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
           </div>
         ) : (
           <div className="flex gap-2">
-            <button onClick={() => onAddFile(id)} className="flex h-12 flex-1 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-orange-600 to-amber-500 text-[15px] font-semibold shadow-[0_8px_28px_rgba(249,115,22,0.45)] active:scale-[0.98]">
-              <Plus className="size-5" strokeWidth={2.5} /> Add movie
+            <button onClick={() => onAddFile(id)} className="btn-black flex h-12 flex-1 items-center justify-center gap-2 rounded-full text-[15px] font-semibold">
+              <Plus className="size-5 text-orange-400" strokeWidth={2.5} /> {isTv ? 'Add series' : 'Add movie'}
             </button>
             {!entry && (
-              <button onClick={addToVault} disabled={busy} className="glass flex h-12 items-center justify-center gap-2 rounded-full px-5 text-[15px] font-semibold">
+              <button onClick={addToVault} disabled={busy} className="btn-black flex h-12 items-center justify-center gap-2 rounded-full px-5 text-[15px] font-semibold">
                 <Bookmark className="size-[18px]" /> Save
               </button>
             )}
@@ -217,7 +240,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
           <button onClick={() => setMore(m => !m)} className="block space-y-1 text-left">
             {d?.tagline && <p className="text-[13px] font-medium text-orange-200/85 italic">“{d.tagline}”</p>}
             <p className={cn('text-[14px] leading-relaxed text-white/75', !more && 'line-clamp-3')}>{t?.overview}</p>
-            {d?.director && <p className="pt-0.5 text-[13px] text-white/50">Director <span className="text-white/85">{d.director}</span></p>}
+            {d?.director && <p className="pt-0.5 text-[13px] text-white/50">{isTv ? 'Created by' : 'Director'} <span className="text-white/85">{d.director}</span></p>}
           </button>
         )}
 
@@ -237,15 +260,21 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
         )}
 
         {/* Tabs */}
-        <Tabs defaultValue="similar" className="gap-3">
-          <TabsList variant="line" className="w-full justify-start gap-4 border-b border-white/10">
+        <Tabs defaultValue={isTv ? 'episodes' : 'similar'} className="gap-3">
+          <TabsList variant="line" className="scrollbar-none w-full justify-start gap-4 overflow-x-auto border-b border-white/10">
+            {isTv && <TabsTrigger value="episodes" className="data-[state=active]:text-orange-400 data-[state=active]:after:bg-orange-500">Episodes</TabsTrigger>}
             <TabsTrigger value="similar" className="data-[state=active]:text-orange-400 data-[state=active]:after:bg-orange-500">More like this</TabsTrigger>
             <TabsTrigger value="trailers" className="data-[state=active]:text-orange-400 data-[state=active]:after:bg-orange-500">Trailers</TabsTrigger>
             {entry && <TabsTrigger value="files" className="data-[state=active]:text-orange-400 data-[state=active]:after:bg-orange-500">Files</TabsTrigger>}
           </TabsList>
+          {isTv && (
+            <TabsContent value="episodes">
+              {d ? <Episodes id={id} seasons={d.seasons} eps={eps} start={upNext?.ep.s} fallback={d.backdrop || d.poster} onPlay={playEp} /> : <Skeleton className="h-40 rounded-2xl" />}
+            </TabsContent>
+          )}
           <TabsContent value="similar">
             <div className="grid grid-cols-3 gap-x-2.5 gap-y-3 sm:grid-cols-5">
-              {d?.similar.map(m => <Poster key={m.id} title={m.title} poster={m.poster} sub={m.year} rating={m.rating} onClick={() => onOpen(m.id)} />)}
+              {d?.similar.map(m => <Poster key={m.id} id={m.id} title={m.title} poster={m.poster} sub={m.year} rating={m.rating} onClick={() => onOpen(m.id)} />)}
             </div>
             {d && !d.similar.length && <p className="text-sm text-white/50">Nothing similar found.</p>}
           </TabsContent>
@@ -274,11 +303,11 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
                     <p className="truncate text-sm">{f.name}</p>
                     <p className="font-mono text-[11px] text-emerald-400">{bytes(f.size)} <span className="text-white/50">· {f.source === 'torbox' ? 'TorBox' : 'Cloud'}</span></p>
                   </div>
-                  <button className="flex size-9 items-center justify-center rounded-full bg-orange-500" aria-label="Play" onClick={() => playFile(f)}><Play className="size-4 fill-white" /></button>
+                  <button className="btn-black flex size-9 items-center justify-center rounded-full" aria-label="Play" onClick={() => playFile(f)}><Play className="size-4 fill-white" /></button>
                   <button className="flex size-9 items-center justify-center rounded-full text-white/70" aria-label="Unlink" onClick={async () => { await api.detach(id, f); onChanged() }}><Trash2 className="size-4" /></button>
                 </div>
               ))}
-              <button className="glass flex h-10 w-full items-center justify-center gap-2 rounded-full text-[13px] font-medium" onClick={() => onAddFile(id)}><Plus className="size-4" /> Add another file</button>
+              <button className="btn-black flex h-10 w-full items-center justify-center gap-2 rounded-full text-[13px] font-medium" onClick={() => onAddFile(id)}><Plus className="size-4" /> {isTv ? 'Add episodes' : 'Add another file'}</button>
             </TabsContent>
           )}
         </Tabs>

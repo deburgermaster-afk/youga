@@ -1,8 +1,9 @@
 import { Star } from 'lucide-react'
-import { img } from '@/lib/api'
+import { img, prefetchTitle } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-export function Poster({ title, poster, sub, rating, badge, progress, onClick, onRate, rated, big, className }: {
+export function Poster({ id, title, poster, sub, rating, badge, progress, onClick, onRate, rated, big, className }: {
+  id?: number // prefetches the title page on touch
   title: string
   poster?: string
   sub?: React.ReactNode // line under the title, e.g. "Drama · 2014 · PR 8"
@@ -17,13 +18,13 @@ export function Poster({ title, poster, sub, rating, badge, progress, onClick, o
 }) {
   return (
     <div className={cn('group relative w-full', className)}>
-      <button onClick={onClick} className="block w-full text-left">
+      <button onClick={onClick} onPointerDown={id ? () => prefetchTitle(id) : undefined} className="block w-full text-left">
         <div className={cn(
           'relative aspect-[2/3] overflow-hidden bg-white/5 ring-1 ring-white/10 transition-transform duration-300 group-active:scale-[0.97]',
           big ? 'rounded-[20px] shadow-[0_12px_30px_rgba(0,0,0,0.45)]' : 'rounded-2xl',
         )}>
           {poster
-            ? <img src={img(poster, big ? 'w500' : 'w342')} alt={title} loading="lazy" className="size-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" />
+            ? <img src={img(poster, 'w342')} alt={title} loading="lazy" decoding="async" className="size-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" />
             : <div className="flex size-full items-center justify-center p-3 text-center text-sm text-white/60">{title}</div>}
           <div className="pointer-events-none absolute inset-0 rounded-[inherit] shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]" />
           {!!rating && (
@@ -43,7 +44,7 @@ export function Poster({ title, poster, sub, rating, badge, progress, onClick, o
         <button
           onClick={onRate}
           aria-label={`Rate ${title}`}
-          className={cn('glass-dark absolute top-2 right-2 flex items-center justify-center rounded-full', big ? 'size-9' : 'size-7')}
+          className={cn('btn-black absolute top-2 right-2 flex items-center justify-center rounded-full', big ? 'size-9' : 'size-7')}
         >
           <Star className={cn(big ? 'size-[18px]' : 'size-3.5', rated ? 'fill-orange-400 text-orange-400' : 'text-white')} />
         </button>

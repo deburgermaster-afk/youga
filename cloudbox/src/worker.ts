@@ -243,6 +243,7 @@ type Movie = {
   addedBy?: string
   files: MovieFile[]
   pending?: string[] // job ids still downloading
+  tv?: boolean // a series (id is the negative TMDB TV id)
   ratings?: Record<string, number> // personal rating (1-10) per profile
   watches?: { by: string; t: number }[] // who watched it and when
 }
@@ -269,14 +270,15 @@ async function updateLibrary(env: Env, fn: (movies: Movie[]) => Movie[] | void) 
 const sameFile = (a: MovieFile, b: MovieFile) =>
   a.source === b.source && (a.source === 'cloud' ? a.key === b.key : a.torrentId === b.torrentId && a.fileId === b.fileId)
 
-async function attachFile(env: Env, movieId: number, file: MovieFile, jobId?: string) {
+async function attachFiles(env: Env, movieId: number, files: MovieFile[], jobId?: string) {
   await updateLibrary(env, list => {
     const m = list.find(x => x.id === movieId)
     if (!m) return
-    if (!m.files.some(f => sameFile(f, file))) m.files.push(file)
+    for (const file of files) if (!m.files.some(f => sameFile(f, file))) m.files.push(file)
     if (jobId) m.pending = (m.pending || []).filter(id => id !== jobId)
   })
 }
+const attachFile = (env: Env, movieId: number, file: MovieFile, jobId?: string) => attachFiles(env, movieId, [file], jobId)
 
 const VIDEO = /\.(mkv|mp4|m4v|avi|mov|webm|ts|wmv)$/i
 // The movie file in a torrent: the biggest video, ignoring samples.
@@ -300,25 +302,64 @@ async function tmdb<T>(env: Env, path: string, params: Record<string, string> = 
   return body
 }
 
-type TmdbLite = { id: number; title: string; release_date?: string; poster_path?: string; backdrop_path?: string; vote_average?: number; overview?: string }
-const lite = (m: TmdbLite) => ({
-  id: m.id, title: m.title, year: m.release_date?.slice(0, 4) || '', poster: m.poster_path || '', backdrop: m.backdrop_path || '',
-  rating: Math.round((m.vote_average || 0) * 10) / 10, overview: m.overview || '',
+// Movies keep their TMDB id; TV series are stored with a negative id so
+// both fit the same library and URLs (TMDB movie and TV ids overlap).
+type TmdbLite = {
+  id: number; title?: string; name?: string; release_date?: string; first_air_date?: string
+  poster_path?: string; backdrop_path?: string; vote_average?: number; overview?: string; media_type?: string
+}
+const lite = (m: TmdbLite, tv = m.media_type === 'tv') => ({
+  id: tv ? -m.id : m.id, title: m.title || m.name || '', year: (m.release_date || m.first_air_date || '').slice(0, 4),
+  poster: m.poster_path || '', backdrop: m.backdrop_path || '',
+  rating: Math.round((m.vote_average || 0) * 10) / 10, overview: m.overview || '', tv,
 })
+const moviesAndShows = (r: TmdbLite[]) => r.filter(m => m.media_type === 'movie' || m.media_type === 'tv').map(m => lite(m))
+
+type Video = { key: string; name: string; site: string; type: string; official?: boolean }
+type Credits = { cast?: { name: string; character: string; profile_path?: string }[]; crew?: { job: string; name: string }[] }
+// Official trailers first; the page autoplays the first one.
+const trailersOf = (v?: Video[]) => (v || [])
+  .filter(x => x.site === 'YouTube' && /Trailer|Teaser/.test(x.type))
+  .map((x, i) => ({ x, score: (x.type === 'Trailer' ? 2 : 0) + (x.official ? 1 : 0), i }))
+  .sort((a, b) => b.score - a.score || a.i - b.i)
+  .slice(0, 6)
+  .map(({ x }) => ({ key: x.key, name: x.name }))
+const castOf = (c?: Credits) => (c?.cast || []).slice(0, 15).map(x => ({ name: x.name, character: x.character, profile: x.profile_path || '' }))
+
+// IMDb ratings, many titles in one request, via IMDb's public GraphQL
+// endpoint (limited personal use).
+async function imdbRatings(ids: string[]): Promise<Record<string, { rating: number; votes: number }>> {
+  const valid = [...new Set(ids.filter(id => /^tt\d+$/.test(id)))].slice(0, 25)
+  if (!valid.length) return {}
+  const query = '{ ' + valid.map((id, i) => `t${i}: title(id: "${id}") { ratingsSummary { aggregateRating voteCount } }`).join(' ') + ' }'
+  const r = await fetch('https://caching.graphql.imdb.com/', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-imdb-client-name': 'imdb-web-next-localized', 'user-agent': 'Mozilla/5.0' },
+    body: JSON.stringify({ query }),
+  })
+  if (!r.ok) return {}
+  const d = (await r.json().catch(() => ({}))) as { data?: Record<string, { ratingsSummary?: { aggregateRating?: number; voteCount?: number } } | null> }
+  const out: Record<string, { rating: number; votes: number }> = {}
+  valid.forEach((id, i) => {
+    const s = d.data?.[`t${i}`]?.ratingsSummary
+    if (s?.aggregateRating) out[id] = { rating: s.aggregateRating, votes: s.voteCount || 0 }
+  })
+  return out
+}
 
 async function movieDetail(env: Env, id: number) {
   type D = TmdbLite & {
     imdb_id?: string; runtime?: number; tagline?: string; genres?: { name: string }[]; vote_count?: number
     production_countries?: { iso_3166_1: string; name: string }[]
-    credits?: { cast?: { name: string; character: string; profile_path?: string }[]; crew?: { job: string; name: string }[] }
-    videos?: { results?: { key: string; name: string; site: string; type: string; official?: boolean }[] }
+    credits?: Credits
+    videos?: { results?: Video[] }
     similar?: { results?: TmdbLite[] }
     release_dates?: { results?: { iso_3166_1: string; release_dates: { certification: string }[] }[] }
   }
   const d = await tmdb<D>(env, `/movie/${id}`, { append_to_response: 'credits,videos,similar,release_dates' })
   const cert = (d.release_dates?.results || []).find(r => r.iso_3166_1 === 'US')?.release_dates.find(x => x.certification)?.certification || ''
   return {
-    ...lite(d),
+    ...lite(d, false),
     imdbId: d.imdb_id || '',
     runtime: d.runtime || 0,
     tagline: d.tagline || '',
@@ -327,16 +368,95 @@ async function movieDetail(env: Env, id: number) {
     country: d.production_countries?.[0]?.iso_3166_1 || '',
     certification: cert,
     director: d.credits?.crew?.find(c => c.job === 'Director')?.name || '',
-    cast: (d.credits?.cast || []).slice(0, 15).map(c => ({ name: c.name, character: c.character, profile: c.profile_path || '' })),
-    // Official trailers first; the page autoplays the first one.
-    trailers: (d.videos?.results || [])
-      .filter(v => v.site === 'YouTube' && /Trailer|Teaser/.test(v.type))
-      .map((v, i) => ({ v, score: (v.type === 'Trailer' ? 2 : 0) + (v.official ? 1 : 0), i }))
-      .sort((a, b) => b.score - a.score || a.i - b.i)
-      .slice(0, 6)
-      .map(({ v }) => ({ key: v.key, name: v.name })),
-    similar: (d.similar?.results || []).slice(0, 15).map(lite),
+    cast: castOf(d.credits),
+    trailers: trailersOf(d.videos?.results),
+    similar: (d.similar?.results || []).slice(0, 15).map(m => lite(m, false)),
+    seasons: [] as { n: number; name: string; episodes: number; poster: string; year: string }[],
   }
+}
+
+async function tvDetail(env: Env, id: number) {
+  type D = TmdbLite & {
+    tagline?: string; genres?: { name: string }[]; vote_count?: number; episode_run_time?: number[]
+    origin_country?: string[]; created_by?: { name: string }[]; last_episode_to_air?: { runtime?: number }
+    seasons?: { season_number: number; name: string; episode_count: number; poster_path?: string; air_date?: string }[]
+    credits?: Credits; videos?: { results?: Video[] }; similar?: { results?: TmdbLite[] }
+    content_ratings?: { results?: { iso_3166_1: string; rating: string }[] }
+    external_ids?: { imdb_id?: string }
+  }
+  const d = await tmdb<D>(env, `/tv/${id}`, { append_to_response: 'credits,videos,similar,content_ratings,external_ids' })
+  const seasons = (d.seasons || []).filter(x => x.episode_count > 0)
+  const main = seasons.filter(x => x.season_number > 0)
+  return {
+    ...lite(d, true),
+    imdbId: d.external_ids?.imdb_id || '',
+    runtime: d.episode_run_time?.[0] || d.last_episode_to_air?.runtime || 0,
+    tagline: d.tagline || '',
+    votes: d.vote_count || 0,
+    genres: (d.genres || []).map(g => g.name),
+    country: d.origin_country?.[0] || '',
+    certification: (d.content_ratings?.results || []).find(r => r.iso_3166_1 === 'US')?.rating || '',
+    director: (d.created_by || []).map(c => c.name).join(', '),
+    cast: castOf(d.credits),
+    trailers: trailersOf(d.videos?.results),
+    similar: (d.similar?.results || []).slice(0, 15).map(m => lite(m, true)),
+    // Specials (season 0) go last.
+    seasons: [...main, ...seasons.filter(x => x.season_number === 0)]
+      .map(x => ({ n: x.season_number, name: x.name, episodes: x.episode_count, poster: x.poster_path || '', year: x.air_date?.slice(0, 4) || '' })),
+  }
+}
+
+async function titleDetail(env: Env, id: number) {
+  const d = id < 0 ? await tvDetail(env, -id) : await movieDetail(env, id)
+  const r = d.imdbId ? (await imdbRatings([d.imdbId]).catch(() => ({})) as Record<string, { rating: number; votes: number }>)[d.imdbId] : undefined
+  return { ...d, imdbRating: r?.rating || 0, imdbVotes: r?.votes || 0 }
+}
+
+async function seasonDetail(env: Env, id: number, n: number) {
+  type E = { episode_number: number; name: string; still_path?: string; runtime?: number; overview?: string; air_date?: string; vote_average?: number }
+  const d = await tmdb<{ episodes?: E[] }>(env, `/tv/${id}/season/${n}`)
+  return {
+    episodes: (d.episodes || []).map(e => ({
+      n: e.episode_number, name: e.name, still: e.still_path || '', runtime: e.runtime || 0,
+      overview: e.overview || '', airDate: e.air_date || '', rating: Math.round((e.vote_average || 0) * 10) / 10,
+    })),
+  }
+}
+
+// Small facts for search rows (IMDb rating, top cast), cached in R2 and in
+// memory so lists fill in instantly the second time.
+type Meta = { imdbId: string; imdb: number; votes: number; cast: string[]; t: number }
+const metaMem = new Map<number, Meta>()
+const META_TTL = 7 * 24 * 3600_000
+async function metaFor(env: Env, ids: number[]) {
+  const out: Record<number, Meta> = {}
+  const missing: number[] = []
+  await Promise.all(ids.map(async id => {
+    const mem = metaMem.get(id)
+    if (mem && Date.now() - mem.t < META_TTL) return void (out[id] = mem)
+    const o = await env.BUCKET.get(`.cloudbox/cache/meta/${id}.json`)
+    const m = o ? ((await o.json()) as Meta) : null
+    if (m && Date.now() - m.t < META_TTL) { metaMem.set(id, m); out[id] = m } else missing.push(id)
+  }))
+  if (!missing.length) return out
+  const fresh = await Promise.all(missing.map(async id => {
+    try {
+      const d = id < 0
+        ? await tmdb<{ external_ids?: { imdb_id?: string }; credits?: Credits }>(env, `/tv/${-id}`, { append_to_response: 'credits,external_ids' })
+        : await tmdb<{ imdb_id?: string; credits?: Credits }>(env, `/movie/${id}`, { append_to_response: 'credits' })
+      const imdbId = ('imdb_id' in d ? d.imdb_id : (d as { external_ids?: { imdb_id?: string } }).external_ids?.imdb_id) || ''
+      return { id, imdbId, cast: (d.credits?.cast || []).slice(0, 3).map(c => c.name) }
+    } catch { return null }
+  }))
+  const ratings = await imdbRatings(fresh.map(f => f?.imdbId || '')).catch(() => ({} as Record<string, { rating: number; votes: number }>))
+  await Promise.all(fresh.map(async f => {
+    if (!f) return
+    const m: Meta = { imdbId: f.imdbId, imdb: ratings[f.imdbId]?.rating || 0, votes: ratings[f.imdbId]?.votes || 0, cast: f.cast, t: Date.now() }
+    out[f.id] = m
+    metaMem.set(f.id, m)
+    await env.BUCKET.put(`.cloudbox/cache/meta/${f.id}.json`, JSON.stringify(m))
+  }))
+  return out
 }
 
 // Per-isolate cache of TorBox download links (they're valid for hours), so
@@ -504,8 +624,10 @@ async function step(env: Env, id: string, maxParts: number): Promise<boolean> {
         job.remoteProgress = 1
         job.status = 'done'
         if (job.movieId) {
-          const f = mainVideo(t.files)
-          await attachFile(env, job.movieId, { source: 'torbox', torrentId: job.torbox!.torrentId, fileId: f.id, name: f.name.split('/').pop() || f.name, size: f.size }, job.id)
+          // A series gets every episode in the torrent; a movie its main file.
+          const eps = t.files.filter(f => VIDEO.test(f.name) && !/sample/i.test(f.name))
+          const pick = job.movieId < 0 && eps.length ? eps : [mainVideo(t.files)]
+          await attachFiles(env, job.movieId, pick.map(f => ({ source: 'torbox' as const, torrentId: job.torbox!.torrentId, fileId: f.id, name: f.name.split('/').pop() || f.name, size: f.size })), job.id)
         }
       }
       job.lockUntil = 0
@@ -740,36 +862,46 @@ export default {
         return new Response(null, { status: 204 })
       }
 
-      // ---- Movie info (TMDB) ----
+      // ---- Movie & series info (TMDB) ----
+      // Browser-cacheable, so lists and pages come back instantly.
+      const cache = (secs: number) => ({ 'cache-control': `private, max-age=${secs}` })
       if (path === '/api/tmdb/search') {
         const q = url.searchParams.get('q') || ''
         if (!q.trim()) return json({ results: [] })
-        const r = await tmdb<{ results: TmdbLite[] }>(env, '/search/movie', { query: q, include_adult: 'false' })
-        return json({ results: r.results.map(lite) })
+        const r = await tmdb<{ results: TmdbLite[] }>(env, '/search/multi', { query: q, include_adult: 'false' })
+        return json({ results: moviesAndShows(r.results) }, 200, cache(600))
       }
       if (path === '/api/tmdb/trending') {
-        const r = await tmdb<{ results: TmdbLite[] }>(env, '/trending/movie/week')
-        return json({ results: r.results.map(lite) })
+        const r = await tmdb<{ results: TmdbLite[] }>(env, '/trending/all/week')
+        return json({ results: moviesAndShows(r.results) }, 200, cache(3600))
       }
-      const tm = /^\/api\/tmdb\/movie\/(\d+)$/.exec(path)
-      if (tm) return json(await movieDetail(env, Number(tm[1])))
+      const tm = /^\/api\/tmdb\/(?:movie|title)\/(-?\d+)$/.exec(path)
+      if (tm) return json(await titleDetail(env, Number(tm[1])), 200, cache(3600))
+      const ts = /^\/api\/tmdb\/tv\/(\d+)\/season\/(\d+)$/.exec(path)
+      if (ts) return json(await seasonDetail(env, Number(ts[1]), Number(ts[2])), 200, cache(3600))
+      if (path === '/api/meta') {
+        const ids = (url.searchParams.get('ids') || '').split(',').map(Number).filter(n => Number.isInteger(n) && n !== 0).slice(0, 12)
+        return json(await metaFor(env, ids), 200, cache(86400))
+      }
 
       // ---- Library ----
       if (path === '/api/library' && req.method === 'GET') return json({ movies: (await readLibrary(env)).sort((a, b) => b.addedAt - a.addedAt) })
       if (path === '/api/library' && req.method === 'POST') {
         const b = (await req.json().catch(() => ({}))) as { id?: number; addedBy?: string }
         if (!b.id) return json({ error: 'Missing movie id' }, 400)
-        const d = await movieDetail(env, Number(b.id))
+        const id = Number(b.id)
+        const d = id < 0 ? await tvDetail(env, -id) : await movieDetail(env, id)
         const next = await updateLibrary(env, list => {
           if (list.some(m => m.id === d.id)) return
           list.push({
             id: d.id, imdbId: d.imdbId, title: d.title, year: d.year, poster: d.poster, backdrop: d.backdrop, rating: d.rating,
             runtime: d.runtime, genres: d.genres, overview: d.overview, addedAt: Date.now(), addedBy: b.addedBy, files: [],
+            ...(d.tv ? { tv: true } : {}),
           })
         })
         return json(next.find(m => m.id === d.id))
       }
-      const lib = /^\/api\/library\/(\d+)(\/attach|\/detach|\/rate|\/watched)?$/.exec(path)
+      const lib = /^\/api\/library\/(-?\d+)(\/attach|\/detach|\/rate|\/watched)?$/.exec(path)
       if (lib) {
         const id = Number(lib[1])
         if (req.method === 'DELETE' && !lib[2]) {
@@ -777,9 +909,11 @@ export default {
           return new Response(null, { status: 204 })
         }
         if (req.method === 'POST' && lib[2] === '/attach') {
-          const f = (await req.json().catch(() => ({}))) as MovieFile
-          if (!f.source || !f.name) return json({ error: 'Missing file' }, 400)
-          await attachFile(env, id, { source: f.source, torrentId: f.torrentId, fileId: f.fileId, key: f.key, name: f.name, size: f.size || 0 })
+          const b = (await req.json().catch(() => ({}))) as MovieFile & { files?: MovieFile[] }
+          const files = (b.files || [b]).filter(f => f && f.source && f.name)
+            .map(f => ({ source: f.source, torrentId: f.torrentId, fileId: f.fileId, key: f.key, name: f.name, size: f.size || 0 }))
+          if (!files.length) return json({ error: 'Missing file' }, 400)
+          await attachFiles(env, id, files)
           return json({ ok: true })
         }
         if (req.method === 'POST' && lib[2] === '/detach') {

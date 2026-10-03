@@ -62,7 +62,7 @@ export function ContributionsPage({ library, onOpen }: { library: Movie[] | null
           <button
             key={p.id}
             onClick={() => setWho(p.id)}
-            className={cn('h-8 flex-1 rounded-full text-xs font-semibold transition-colors', who === p.id ? 'bg-white text-black' : 'text-white/65')}
+            className={cn('h-8 flex-1 rounded-full text-xs font-semibold transition-colors', who === p.id ? 'btn-black text-white' : 'border border-transparent text-white/60')}
           >
             {p.name}
           </button>
@@ -77,7 +77,7 @@ export function ContributionsPage({ library, onOpen }: { library: Movie[] | null
         return (
           <section key={`${y}-${mo}`} className="space-y-2">
             <h3 className="text-[13px] font-medium text-white/55">{first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</h3>
-            <div className="grid grid-cols-7 gap-1.5">
+            <div className="grid grid-cols-7 gap-x-1.5 gap-y-2">
               {Array.from({ length: lead }, (_, i) => <span key={`l${i}`} />)}
               {Array.from({ length: days }, (_, i) => {
                 const d = new Date(y, mo, i + 1)
@@ -86,14 +86,18 @@ export function ContributionsPage({ library, onOpen }: { library: Movie[] | null
                 const future = d > now && k !== today
                 const top = evs?.[0]
                 const label = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+                const person = top?.by ? profileById(top.by) : undefined
                 return (
                   <button
                     key={k}
                     disabled={!evs}
                     onClick={() => evs && openDay(label, evs)}
-                    aria-label={evs ? `${label}: ${evs.length} ${evs.length === 1 ? 'entry' : 'entries'}` : label}
+                    aria-label={evs ? `${label}: ${evs.map(e => e.m.title).join(', ')}` : label}
+                    className="flex min-w-0 flex-col items-stretch"
+                  >
+                  <span
                     className={cn(
-                      'relative aspect-square overflow-hidden rounded-[14px] transition-transform active:scale-95',
+                      'relative block aspect-square overflow-hidden rounded-[14px] transition-transform active:scale-95',
                       evs ? 'ring-1 ring-white/15 shadow-[0_4px_14px_rgba(0,0,0,0.45)]' : 'bg-white/[0.035] ring-1 ring-white/[0.06]',
                       future && 'opacity-40',
                       k === today && 'ring-2 ring-orange-400 shadow-[0_0_18px_rgba(249,115,22,0.55)]',
@@ -105,6 +109,11 @@ export function ContributionsPage({ library, onOpen }: { library: Movie[] | null
                     {evs && evs.length > 1 && (
                       <span className="absolute top-0.5 right-0.5 flex size-3.5 items-center justify-center rounded-full bg-orange-500 text-[8px] font-bold text-white">{evs.length}</span>
                     )}
+                    {person && (
+                      <span className={cn('absolute top-0.5 left-0.5 flex size-3.5 items-center justify-center rounded-full bg-gradient-to-br text-[7px] font-black text-white', person.color)}>{person.name[0]}</span>
+                    )}
+                  </span>
+                  {top && <span className="mt-0.5 truncate text-center text-[8.5px] leading-tight font-medium text-white/70">{top.m.title}</span>}
                   </button>
                 )
               })}

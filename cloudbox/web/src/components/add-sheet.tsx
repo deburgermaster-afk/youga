@@ -21,7 +21,10 @@ export function guessTitle(link: string) {
   if (/^magnet:/i.test(link)) name = new URLSearchParams(link.slice(link.indexOf('?') + 1)).get('dn') || ''
   else { try { name = decodeURIComponent(new URL(link).pathname.split('/').pop() || '') } catch { name = link } }
   name = name.replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[._]+/g, ' ').replace(/\s+/g, ' ')
-  const m = /^(.*?)[\s([]*((?:19|20)\d{2})(?!\d)/.exec(name)
+  const m = /^(.*\S)[\s([]+((?:19|20)\d{2})(?!\d)/.exec(name) // the last year: "Blade Runner 2049 2017"
+  // Series packs: "Show.Name.S01.1080p" / "Show Name Season 2"
+  const tv = /^(.*?)\b(?:S\d{1,2}(?:E\d{1,3})?|Season[ ._]?\d{1,2}|Complete)\b/i.exec(name)
+  if (tv && tv[1].trim() && (!m || tv[1].length < m[1].length)) return { title: tv[1].replace(/[([\-–\s]+$/, '').trim(), year: undefined }
   const title = (m ? m[1] : name.split(/\b(2160p|1080p|720p|480p|4k|bluray|web-?dl|webrip|hdr|x264|x265|hevc|remux)\b/i)[0]).replace(/[([\-–]+$/, '').trim()
   return { title, year: m?.[2] }
 }
@@ -32,7 +35,7 @@ function MovieChoice({ m, selected, onClick }: { m: MovieLite; selected: boolean
       <div className="h-16 w-11 shrink-0 overflow-hidden rounded-md bg-white/5">{m.poster && <img src={img(m.poster, 'w185')} alt="" className="size-full object-cover" />}</div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{m.title}</p>
-        <p className="text-xs text-white/50">{m.year}</p>
+        <p className="text-xs text-white/50">{[m.tv ? 'Series' : 'Movie', m.year].filter(Boolean).join(' · ')}</p>
       </div>
       {selected && <Check className="mr-1 size-5 text-orange-400" />}
     </button>
@@ -123,10 +126,16 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
     setBusy(true)
     try {
       await ensureInVault(movie)
-      await api.attach(movie.id, e.source === 'torbox'
-        ? { source: 'torbox', torrentId: e.torrentId, fileId: e.fileId, name: e.name, size: e.size }
-        : { source: 'cloud', key: e.path, name: e.name, size: e.size })
-      toast.success(`Linked to ${movie.title}`)
+      const asFile = (x: Entry) => x.source === 'torbox'
+        ? { source: 'torbox' as const, torrentId: x.torrentId, fileId: x.fileId, name: x.name, size: x.size }
+        : { source: 'cloud' as const, key: x.path, name: x.name, size: x.size }
+      // A series takes every episode next to the one you tapped (same torrent or folder).
+      const dir = (x: Entry) => x.path.slice(0, x.path.lastIndexOf('/') + 1)
+      const group = movie.tv
+        ? (existing || []).filter(x => x.source === e.source && (e.source === 'torbox' ? x.torrentId === e.torrentId : dir(x) === dir(e)))
+        : [e]
+      await api.attachMany(movie.id, group.map(asFile))
+      toast.success(group.length > 1 ? `Linked ${group.length} episodes to ${movie.title}` : `Linked to ${movie.title}`)
       onDone(); onOpenChange(false)
     } catch (err) { toast.error((err as Error).message) }
     setBusy(false)
@@ -153,7 +162,7 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
   )
 
   return (
-    <Panel open={open} onOpenChange={onOpenChange} title={movieId && movie ? `Add movie: ${movie.title}` : 'Add a movie'} description="Paste a magnet or download link you have the rights to.">
+    <Panel open={open} onOpenChange={onOpenChange} title={movieId && movie ? `${movie.tv ? 'Add episodes' : 'Add movie'}: ${movie.title}` : 'Add a movie or series'} description="Paste a magnet or download link you have the rights to.">
       <Tabs defaultValue="link" onValueChange={v => v === 'existing' && loadExisting()} className="gap-4">
         <TabsList className="w-full">
           <TabsTrigger value="link">Link</TabsTrigger>
@@ -166,9 +175,9 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
               <Textarea id="link" value={link} onChange={e => setLink(e.target.value)} placeholder="magnet:?xt=urn:btih:… or https://…" className="min-h-24 font-mono text-sm" autoComplete="off" spellCheck={false} />
             </Field>
             {moviePicker}
-            <Button className="h-12 rounded-full bg-gradient-to-r from-orange-600 to-amber-500 text-base font-semibold text-white" disabled={busy || !isLink(link.trim())} onClick={start}>
-              {busy && <Spinner />} Add movie
-            </Button>
+            <button className="btn-black flex h-12 items-center justify-center gap-2 rounded-full text-base font-semibold disabled:opacity-50" disabled={busy || !isLink(link.trim())} onClick={start}>
+              {busy && <Spinner />} {movie?.tv ? 'Add series' : 'Add movie'}
+            </button>
             {movie && !library.some(x => x.id === movie.id) && (
               <button disabled={busy} onClick={saveOnly} className="text-sm text-white/60 underline underline-offset-4">Just save it to the vault for now</button>
             )}
@@ -188,7 +197,7 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
                       <p className="truncate text-sm">{e.name}</p>
                       <p className="font-mono text-[11px] text-emerald-400">{bytes(e.size)} <span className="text-white/50">· {e.source === 'torbox' ? 'TorBox' : 'Cloud'}</span></p>
                     </div>
-                    <span className="text-xs text-orange-300">Link</span>
+                    <span className="text-xs text-orange-300">{movie?.tv ? 'Link all' : 'Link'}</span>
                   </button>
                 ))}
               </div>

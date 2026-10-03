@@ -31,22 +31,31 @@ export type Entry = {
   torrentName?: string
 }
 
-export type MovieLite = { id: number; title: string; year: string; poster: string; backdrop: string; rating: number; overview: string }
+// Series use negative ids (TMDB movie and TV ids overlap).
+export type MovieLite = { id: number; title: string; year: string; poster: string; backdrop: string; rating: number; overview: string; tv?: boolean }
+export type Season = { n: number; name: string; episodes: number; poster: string; year: string }
+export type Episode = { n: number; name: string; still: string; runtime: number; overview: string; airDate: string; rating: number }
 export type MovieDetail = MovieLite & {
   imdbId: string; runtime: number; tagline: string; votes: number; genres: string[]; country: string; certification: string; director: string
   cast: { name: string; character: string; profile: string }[]
   trailers: { key: string; name: string }[]
   similar: MovieLite[]
+  seasons: Season[]
+  imdbRating?: number; imdbVotes?: number
 }
+export type Meta = { imdbId: string; imdb: number; votes: number; cast: string[] }
 export type MovieFile = { source: 'torbox' | 'cloud'; torrentId?: number; fileId?: number; key?: string; name: string; size: number }
 export type Movie = {
   id: number; imdbId?: string; title: string; year?: string; poster?: string; backdrop?: string; rating?: number; runtime?: number
   genres?: string[]; overview?: string; addedAt: number; addedBy?: string; files: MovieFile[]; pending?: string[]
-  ratings?: Record<string, number>; watches?: { by: string; t: number }[]
+  ratings?: Record<string, number>; watches?: { by: string; t: number }[]; tv?: boolean
 }
 
+const titles = new Map<number, Promise<MovieDetail>>()
+export const prefetchTitle = (id: number) => { api.movie(id).catch(() => {}) }
+
 const IMG = 'https://image.tmdb.org/t/p/'
-export const img = (path: string | undefined, size: 'w185' | 'w342' | 'w500' | 'w780' | 'w1280' | 'original' = 'w500') => (path ? IMG + size + path : '')
+export const img = (path: string | undefined, size: 'w185' | 'w300' | 'w342' | 'w500' | 'w780' | 'w1280' | 'original' = 'w500') => (path ? IMG + size + path : '')
 
 // Stream URL for a library file (TorBox relay or Cloudflare).
 export const movieFileUrl = (f: MovieFile) =>
@@ -77,12 +86,20 @@ export const api = {
   addMovie: (id: number, addedBy?: string) => req<Movie>('/api/library', post({ id, addedBy })),
   removeMovie: (id: number) => req(`/api/library/${id}`, { method: 'DELETE' }),
   attach: (id: number, f: MovieFile) => req(`/api/library/${id}/attach`, post(f)),
+  attachMany: (id: number, files: MovieFile[]) => req(`/api/library/${id}/attach`, post({ files })),
   detach: (id: number, f: MovieFile) => req(`/api/library/${id}/detach`, post(f)),
   rate: (id: number, by: string, value: number) => req(`/api/library/${id}/rate`, post({ by, value })),
   watched: (id: number, by: string) => req(`/api/library/${id}/watched`, post({ by })),
   search: (q: string) => req<{ results: MovieLite[] }>(`/api/tmdb/search?q=${encodeURIComponent(q)}`),
   trending: () => req<{ results: MovieLite[] }>('/api/tmdb/trending'),
-  movie: (id: number) => req<MovieDetail>(`/api/tmdb/movie/${id}`),
+  // Title pages are fetched once and kept, so opening one again (or after a prefetch) is instant.
+  movie: (id: number) => {
+    let p = titles.get(id)
+    if (!p) { p = req<MovieDetail>(`/api/tmdb/title/${id}`); p.catch(() => titles.delete(id)); titles.set(id, p) }
+    return p
+  },
+  season: (tvId: number, n: number) => req<{ episodes: Episode[] }>(`/api/tmdb/tv/${Math.abs(tvId)}/season/${n}`),
+  meta: (ids: number[]) => req<Record<string, Meta>>(`/api/meta?ids=${ids.join(',')}`),
   jobAction: (id: string, action: 'pause' | 'resume' | 'retry') => req<Job>(`/api/jobs/${id}/${action}`, post()),
   removeJob: (id: string) => req(`/api/jobs/${id}`, { method: 'DELETE' }),
   pump: () => req('/api/pump', post()),

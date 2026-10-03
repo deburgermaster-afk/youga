@@ -68,7 +68,7 @@ export function RateSheet({ target, library, onClose, onChanged }: {
                   onClick={() => set(v)}
                   className={cn(
                     'flex h-12 items-center justify-center rounded-2xl font-display text-lg font-bold transition-all active:scale-95',
-                    v === mine ? 'bg-gradient-to-br from-orange-500 to-amber-500 text-white shadow-[0_6px_20px_rgba(249,115,22,0.45)]' : 'glass text-white/85',
+                    'btn-black', v === mine ? 'text-orange-400 ring-2 ring-orange-400/80' : 'text-white/85',
                   )}
                 >
                   {busy === v ? <Spinner /> : v}

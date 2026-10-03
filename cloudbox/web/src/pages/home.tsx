@@ -60,7 +60,7 @@ export function HomePage({ library, jobs, refresh, onOpen, onSearch, onAdd }: {
                 title={m?.title || p.name}
                 poster={m?.poster}
                 progress={p.d ? p.t / p.d : 0}
-                sub={p.d ? `${Math.max(1, Math.round((p.d - p.t) / 60))} min left` : undefined}
+                sub={[p.ep, p.d ? `${Math.max(1, Math.round((p.d - p.t) / 60))}m left` : ''].filter(Boolean).join(' · ') || undefined}
                 onClick={() => (m ? onOpen(m.id) : play({ url: p.url, name: p.name }))}
               />
             ))}
@@ -75,15 +75,16 @@ export function HomePage({ library, jobs, refresh, onOpen, onSearch, onAdd }: {
       )}
 
       {library.length > 0 ? (
-        <Section title="Your vault" aside={`${library.length} movie${library.length === 1 ? '' : 's'}`}>
+        <Section title="Your vault" aside={`${library.length} title${library.length === 1 ? '' : 's'}`}>
           <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
             {library.map(m => (
               <Poster
                 key={m.id}
+                id={m.id}
                 big
                 title={m.title}
                 poster={m.poster}
-                sub={<MetaLine parts={[kind(m.genres), m.year]} pr={prText(pr(m))} />}
+                sub={<MetaLine parts={[m.tv ? 'Series' : kind(m.genres), m.year]} pr={prText(pr(m))} />}
                 onClick={() => onOpen(m.id)}
                 onRate={() => rate({ id: m.id, title: m.title, poster: m.poster })}
                 rated={!!m.ratings?.[profile]}
@@ -97,8 +98,8 @@ export function HomePage({ library, jobs, refresh, onOpen, onSearch, onAdd }: {
           <h2 className="font-display text-xl font-bold">Your vault is empty</h2>
           <p className="text-sm text-white/60">Search for a movie, then add it with a link.</p>
           <div className="flex justify-center gap-2">
-            <button onClick={onSearch} className="flex h-10 items-center gap-1.5 rounded-full bg-gradient-to-r from-orange-600 to-amber-500 px-4 text-sm font-semibold"><Search className="size-4" /> Search movies</button>
-            <button onClick={onAdd} className="glass flex h-10 items-center gap-1.5 rounded-full px-4 text-sm font-semibold"><Plus className="size-4" /> Add movie</button>
+            <button onClick={onSearch} className="btn-black flex h-10 items-center gap-1.5 rounded-full px-4 text-sm font-semibold"><Search className="size-4 text-orange-400" /> Search movies</button>
+            <button onClick={onAdd} className="btn-black flex h-10 items-center gap-1.5 rounded-full px-4 text-sm font-semibold"><Plus className="size-4 text-orange-400" /> Add movie</button>
           </div>
         </div>
       )}

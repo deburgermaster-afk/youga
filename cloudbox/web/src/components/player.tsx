@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Captions, Gauge, Link2, PictureInPicture2 } from 'lucide-react'
+import { Captions, Gauge, Link2, PictureInPicture2, SkipForward } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -9,7 +9,8 @@ import {
 import { isAudio, isImage } from '@/lib/api'
 import { absolute, copy, openInApp, platform, playersFor } from '@/lib/links'
 import { useApp, type Media } from '@/lib/app-context'
-import { positionFor, saveProgress } from '@/lib/profiles'
+import { markDone, positionFor, saveProgress } from '@/lib/profiles'
+import { playMovie } from '@/lib/movie'
 
 // SRT -> WebVTT so the browser's <track> can show it.
 function srtToVtt(srt: string) {
@@ -26,13 +27,19 @@ const langName = (name: string) => {
 }
 
 export function Player({ media, onClose }: { media: Media | null; onClose: () => void }) {
-  const { profile } = useApp()
+  const { profile, play } = useApp()
   // "Continue watching" is saved per profile.
   const loadPos = (url: string) => positionFor(profile, url)
   const savePos = (url: string, t: number) => {
     const v = video.current
     if (!media) return
-    saveProgress(profile, { movieId: media.movieId, url, name: media.title || media.name, t, d: v?.duration || 0, at: Date.now() })
+    saveProgress(profile, { movieId: media.movieId, url, name: media.title || media.name, ep: media.ep, t, d: v?.duration || 0, at: Date.now() })
+  }
+  // Series: go on to the next episode.
+  const next = media?.queue?.[0]
+  const playNext = () => {
+    if (!media || !next) return
+    void playMovie(play, { id: media.movieId ?? 0, title: media.title || '' }, next.f, { ep: next.ep, queue: media.queue!.slice(1) })
   }
   const [failed, setFailed] = useState(false)
   const [tracks, setTracks] = useState<{ label: string; src: string; lang: string }[]>([])
@@ -72,7 +79,7 @@ export function Player({ media, onClose }: { media: Media | null; onClose: () =>
     <Dialog open={!!media} onOpenChange={o => { if (!o) close() }}>
       <DialogContent className="flex h-dvh w-screen max-w-none flex-col gap-0 rounded-none border-0 bg-black p-0 sm:max-w-none md:h-auto md:max-h-[92dvh] md:w-[min(94vw,1280px)] md:rounded-xl md:border">
         <div className="border-b px-4 py-3 pr-12">
-          <DialogTitle className="truncate text-sm">{media?.name}</DialogTitle>
+          <DialogTitle className="truncate text-sm">{media?.ep ? `${media.title} · ${media.ep}` : media?.title || media?.name}</DialogTitle>
           <DialogDescription className="sr-only">Media player</DialogDescription>
         </div>
 
@@ -101,7 +108,11 @@ export function Player({ media, onClose }: { media: Media | null; onClose: () =>
                       }
                     }}
                     onTimeUpdate={e => { const t = e.currentTarget.currentTime; if (Math.floor(t) % 5 === 0) savePos(media.url, t) }}
-                    onEnded={() => savePos(media.url, 0)}
+                    onEnded={() => {
+                      markDone(profile, media.url)
+                      savePos(media.url, 0)
+                      if (next) { toast(`Up next: ${next.ep}`); playNext() }
+                    }}
                     onError={() => setFailed(true)}
                     className="max-h-full w-full bg-black md:max-h-[72dvh]"
                   >
@@ -148,6 +159,11 @@ export function Player({ media, onClose }: { media: Media | null; onClose: () =>
               {'pictureInPictureEnabled' in document && (
                 <Button size="sm" variant="outline" aria-label="Picture in picture" onClick={() => video.current?.requestPictureInPicture().catch(() => toast('Picture-in-picture not available'))}>
                   <PictureInPicture2 />
+                </Button>
+              )}
+              {next && (
+                <Button size="sm" variant="outline" onClick={() => { if (video.current) savePos(media.url, video.current.currentTime); playNext() }}>
+                  <SkipForward /> Next episode
                 </Button>
               )}
               <Button size="sm" variant="ghost" onClick={async () => { if (media) { await copy(absolute(media.url)); toast.success('Stream link copied') } }}>

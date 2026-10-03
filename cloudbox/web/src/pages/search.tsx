@@ -3,22 +3,35 @@ import { Play, Plus, Search, Star, X } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { MetaLine, Poster } from '@/components/poster'
-import { api, img, type Job, type Movie, type MovieLite } from '@/lib/api'
+import { api, img, prefetchTitle, type Job, type Meta, type Movie, type MovieLite } from '@/lib/api'
 import { useApp } from '@/lib/app-context'
 import { kind, playMovie, pr, prText } from '@/lib/movie'
 
 const norm = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim()
 
-function Row({ poster, title, sub, action, onClick }: { poster?: string; title: string; sub: React.ReactNode; action: React.ReactNode; onClick: () => void }) {
+// IMDb score (TMDB's as a fallback until IMDb's arrives) and the top cast.
+function Facts({ meta, tmdb }: { meta?: Meta; tmdb?: number }) {
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-1.5">
+      {meta?.imdb
+        ? <span className="shrink-0 rounded bg-[#f5c518] px-1 text-[10px] leading-4 font-black text-black">IMDb {meta.imdb.toFixed(1)}</span>
+        : tmdb ? <span className="flex shrink-0 items-center gap-0.5 text-[11px] text-white/60"><Star className="size-3 fill-orange-400 text-orange-400" />{tmdb.toFixed(1)}</span> : null}
+      {meta?.cast.length ? <span className="truncate text-[11px] text-white/50">{meta.cast.join(', ')}</span> : null}
+    </div>
+  )
+}
+
+function Row({ id, poster, title, sub, facts, action, onClick }: { id: number; poster?: string; title: string; sub: React.ReactNode; facts: React.ReactNode; action: React.ReactNode; onClick: () => void }) {
   return (
     <div className="glass flex items-center gap-3 rounded-2xl p-1.5 pr-2.5">
-      <button onClick={onClick} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-        <div className="h-[72px] w-12 shrink-0 overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
-          {poster && <img src={img(poster, 'w185')} alt="" loading="lazy" className="size-full object-cover" />}
+      <button onClick={onClick} onPointerDown={() => prefetchTitle(id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+        <div className="h-[78px] w-[52px] shrink-0 overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
+          {poster && <img src={img(poster, 'w185')} alt="" loading="lazy" decoding="async" className="size-full object-cover" />}
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-[15px] font-semibold tracking-tight">{title}</p>
           <p className="truncate text-xs text-white/55">{sub}</p>
+          {facts}
         </div>
       </button>
       {action}
@@ -39,6 +52,7 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
   const [trending, setTrending] = useState<MovieLite[] | null>(null)
   const [err, setErr] = useState('')
   const [starting, setStarting] = useState<number | null>(null)
+  const [meta, setMeta] = useState<Record<string, Meta>>({})
   const input = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -63,6 +77,19 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
   const mineIds = new Set(mine.map(m => m.id))
   const others = results?.filter(r => !mineIds.has(r.id)) ?? null
 
+  // Fill in IMDb ratings and cast for what's on screen (in two small batches).
+  const ids = [...mine.map(m => m.id), ...(others ?? []).map(m => m.id)].slice(0, 20)
+  const idsKey = ids.join(',')
+  useEffect(() => {
+    if (!idsKey) return
+    let live = true
+    const want = idsKey.split(',').map(Number)
+    for (const batch of [want.slice(0, 10), want.slice(10, 20)]) {
+      if (batch.length) api.meta(batch).then(r => live && setMeta(m => ({ ...m, ...r }))).catch(() => {})
+    }
+    return () => { live = false }
+  }, [idsKey])
+
   const playNow = async (m: Movie) => {
     setStarting(m.id)
     await playMovie(play, m, m.files[0])
@@ -72,8 +99,8 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
   const vaultAction = (m: Movie) => {
     if (m.files.length) {
       return (
-        <button aria-label={`Play ${m.title}`} onClick={() => playNow(m)} className="flex size-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-orange-500 to-amber-500 shadow-[0_6px_20px_rgba(249,115,22,0.45)]">
-          {starting === m.id ? <Spinner /> : <Play className="size-5 fill-white text-white" />}
+        <button aria-label={`Play ${m.title}`} onClick={() => (m.tv ? onOpen(m.id) : playNow(m))} className="btn-black flex size-11 shrink-0 items-center justify-center rounded-full">
+          {starting === m.id ? <Spinner /> : <Play className="size-5 fill-orange-400 text-orange-400" />}
         </button>
       )
     }
@@ -111,19 +138,21 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
             <section className="space-y-2">
               <h2 className="font-display text-[17px] font-bold tracking-tight">In your vault</h2>
               {mine.map(m => (
-                <Row key={m.id} poster={m.poster} title={m.title} onClick={() => onOpen(m.id)}
-                  sub={<MetaLine parts={[kind(m.genres), m.year]} pr={prText(pr(m))} />}
+                <Row key={m.id} id={m.id} poster={m.poster} title={m.title} onClick={() => onOpen(m.id)}
+                  sub={<MetaLine parts={[m.tv ? 'Series' : kind(m.genres), m.year]} pr={prText(pr(m))} />}
+                  facts={<Facts meta={meta[m.id]} tmdb={m.rating} />}
                   action={vaultAction(m)} />
               ))}
             </section>
           )}
           <section className="space-y-2">
             <h2 className="font-display text-[17px] font-bold tracking-tight">{mine.length ? 'More from TMDB' : 'Results'}</h2>
-            {!others && !err && Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[84px] rounded-2xl" />)}
+            {!others && !err && Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[90px] rounded-2xl" />)}
             {others?.length === 0 && <p className="text-sm text-white/55">{mine.length ? 'Nothing else found.' : 'No movies found.'}</p>}
             {others?.map(m => (
-              <Row key={m.id} poster={m.poster} title={m.title} onClick={() => onOpen(m.id)}
-                sub={<>{m.year || '—'}{!!m.rating && <> · <Star className="inline size-3 -translate-y-px fill-orange-400 text-orange-400" /> {m.rating.toFixed(1)}</>}</>}
+              <Row key={m.id} id={m.id} poster={m.poster} title={m.title} onClick={() => onOpen(m.id)}
+                sub={[m.tv ? 'Series' : 'Movie', m.year].filter(Boolean).join(' · ')}
+                facts={<Facts meta={meta[m.id]} tmdb={m.rating} />}
                 action={<AddButton onClick={() => onAdd(m.id)} />} />
             ))}
           </section>
@@ -134,7 +163,7 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
           <div className="grid grid-cols-3 gap-x-2.5 gap-y-3 sm:grid-cols-5 lg:grid-cols-7">
             {!trending && !err && Array.from({ length: 9 }, (_, i) => <Skeleton key={i} className="aspect-[2/3] rounded-2xl" />)}
             {trending?.map(m => (
-              <Poster key={m.id} title={m.title} poster={m.poster} sub={m.year} rating={m.rating} onClick={() => onOpen(m.id)}
+              <Poster key={m.id} id={m.id} title={m.title} poster={m.poster} sub={[m.tv ? 'Series' : '', m.year].filter(Boolean).join(' · ')} rating={m.rating} onClick={() => onOpen(m.id)}
                 badge={library.some(x => x.id === m.id) ? <span className="rounded-full bg-orange-500 px-2 py-0.5 text-[10px] font-semibold">Vault</span> : undefined} />
             ))}
           </div>
@@ -146,8 +175,8 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
 
 function AddButton({ onClick }: { onClick: () => void }) {
   return (
-    <button onClick={onClick} className="flex h-9 shrink-0 items-center gap-1 rounded-full bg-white px-3.5 text-[13px] font-semibold text-black active:scale-95">
-      <Plus className="size-4" strokeWidth={2.6} /> Add
+    <button onClick={onClick} className="btn-black flex h-9 shrink-0 items-center gap-1 rounded-full px-3.5 text-[13px] font-semibold">
+      <Plus className="size-4 text-orange-400" strokeWidth={2.6} /> Add
     </button>
   )
 }

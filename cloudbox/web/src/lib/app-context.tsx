@@ -1,8 +1,14 @@
 import { createContext, useContext } from 'react'
 import type { Prefs } from '@/lib/links'
+import type { MovieFile } from '@/lib/api'
 import type { RateTarget } from '@/components/rate-sheet'
 
-export type Media = { url: string; name: string; title?: string; movieId?: number; subs?: { name: string; url: string }[] }
+export type QueueItem = { f: MovieFile; ep: string }
+export type Media = {
+  url: string; name: string; title?: string; movieId?: number; subs?: { name: string; url: string }[]
+  ep?: string // "S1 E2 · Pilot" when it's an episode
+  queue?: QueueItem[] // episodes that play after this one
+}
 
 export type AppCtx = {
   prefs: Prefs

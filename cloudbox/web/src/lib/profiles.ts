@@ -18,7 +18,7 @@ export function setSessionProfile(id: ProfileId | null) {
 }
 
 // ---------- Continue watching ----------
-export type Progress = { movieId?: number; url: string; name: string; t: number; d: number; at: number }
+export type Progress = { movieId?: number; url: string; name: string; t: number; d: number; at: number; ep?: string }
 const cwKey = (p: string) => `cloudbox:cw:${p}`
 
 export function getProgress(profile: string): Progress[] {
@@ -29,7 +29,22 @@ export function saveProgress(profile: string, p: Progress) {
     const list = getProgress(profile).filter(x => x.url !== p.url)
     // Finished (last 3%) or barely started items don't belong in the row.
     if (p.d > 0 && p.t / p.d < 0.97 && p.t > 15) list.unshift(p)
+    if (p.d > 0 && p.t / p.d >= 0.97) markDone(profile, p.url)
     localStorage.setItem(cwKey(profile), JSON.stringify(list.slice(0, 20)))
   } catch { /* ignore */ }
 }
 export const positionFor = (profile: string, url: string) => getProgress(profile).find(x => x.url === url)?.t || 0
+
+// ---------- Finished episodes / movies ----------
+const doneKey = (p: string) => `cloudbox:done:${p}`
+function doneSet(profile: string): string[] {
+  try { return JSON.parse(localStorage.getItem(doneKey(profile)) || '[]') } catch { return [] }
+}
+export const isDone = (profile: string, url: string) => doneSet(profile).includes(url)
+export function markDone(profile: string, url: string) {
+  try {
+    const list = doneSet(profile).filter(u => u !== url)
+    list.push(url)
+    localStorage.setItem(doneKey(profile), JSON.stringify(list.slice(-2000)))
+  } catch { /* ignore */ }
+}
