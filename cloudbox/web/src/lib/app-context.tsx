@@ -17,6 +17,8 @@ export type AppCtx = {
   profile: string
   rate: (t: RateTarget) => void
   playing: boolean // the player is open
+  // Free legal copy? Add it and start playing. Otherwise ask for a magnet link.
+  addOrAsk: (m: { id: number; title: string }) => Promise<void>
 }
 
 export const AppContext = createContext<AppCtx>(null!)

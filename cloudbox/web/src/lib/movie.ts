@@ -16,6 +16,7 @@ export const kind = (genres?: string[]) => (genres?.[0] ? SHORT[genres[0]] || ge
 // Subtitles that came with the same torrent / folder.
 export async function subsFor(f: MovieFile) {
   try {
+    if (f.source === 'archive') return []
     if (f.source === 'torbox') {
       const all = (await api.torboxFiles()).entries
       const me = all.find(e => e.torrentId === f.torrentId && e.fileId === f.fileId)

@@ -44,7 +44,9 @@ export type MovieDetail = MovieLite & {
   imdbRating?: number; imdbVotes?: number
 }
 export type Meta = { imdbId: string; imdb: number; votes: number; cast: string[] }
-export type MovieFile = { source: 'torbox' | 'cloud'; torrentId?: number; fileId?: number; key?: string; name: string; size: number }
+// 'archive' = a free, legal copy streamed from the Internet Archive.
+export type MovieFile = { source: 'torbox' | 'cloud' | 'archive'; torrentId?: number; fileId?: number; key?: string; url?: string; name: string; size: number }
+export type FreeCopy = { found: boolean; why?: string; source?: string; page?: string; file?: MovieFile }
 export type Movie = {
   id: number; imdbId?: string; title: string; year?: string; poster?: string; backdrop?: string; rating?: number; runtime?: number
   genres?: string[]; overview?: string; addedAt: number; addedBy?: string; files: MovieFile[]; pending?: string[]
@@ -52,6 +54,7 @@ export type Movie = {
 }
 
 const titles = new Map<number, Promise<MovieDetail>>()
+const frees = new Map<number, Promise<FreeCopy>>()
 export const prefetchTitle = (id: number) => { api.movie(id).catch(() => {}) }
 
 const IMG = 'https://image.tmdb.org/t/p/'
@@ -59,7 +62,8 @@ export const img = (path: string | undefined, size: 'w185' | 'w300' | 'w342' | '
 
 // Stream URL for a library file (TorBox relay or Cloudflare).
 export const movieFileUrl = (f: MovieFile) =>
-  f.source === 'torbox' ? `/tb/${f.torrentId}/${f.fileId}/${encodeURIComponent(f.name)}` : fileUrl(f.key || '')
+  f.source === 'archive' ? f.url || ''
+    : f.source === 'torbox' ? `/tb/${f.torrentId}/${f.fileId}/${encodeURIComponent(f.name)}` : fileUrl(f.key || '')
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { credentials: 'same-origin', ...init })
@@ -100,6 +104,12 @@ export const api = {
   },
   season: (tvId: number, n: number) => req<{ episodes: Episode[] }>(`/api/tmdb/tv/${Math.abs(tvId)}/season/${n}`),
   meta: (ids: number[]) => req<Record<string, Meta>>(`/api/meta?ids=${ids.join(',')}`),
+  // Is there a free, legal copy (public domain / Creative Commons)? Asked once per title.
+  free: (id: number) => {
+    let p = frees.get(id)
+    if (!p) { p = id > 0 ? req<FreeCopy>(`/api/free/${id}`) : Promise.resolve({ found: false }); p.catch(() => frees.delete(id)); frees.set(id, p) }
+    return p
+  },
   jobAction: (id: string, action: 'pause' | 'resume' | 'retry') => req<Job>(`/api/jobs/${id}/${action}`, post()),
   removeJob: (id: string) => req(`/api/jobs/${id}`, { method: 'DELETE' }),
   pump: () => req('/api/pump', post()),

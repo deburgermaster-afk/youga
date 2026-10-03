@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Settings2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
 import { GlowBackground } from '@/components/glow-bg'
@@ -98,7 +99,26 @@ export default function App() {
     setMedia(m)
     if (m.movieId && profile) api.watched(m.movieId, profile).then(loadLibrary).catch(() => {})
   }, [profile, loadLibrary])
-  const ctx = useMemo(() => ({ prefs, setPrefs, play, profile: profile || 'tj', rate: setRating, playing: !!media }), [prefs, setPrefs, play, profile, media])
+  const addOrAsk = useCallback(async (m: { id: number; title: string }) => {
+    if (m.id > 0) {
+      const t = toast.loading(`Looking for a free copy of ${m.title}…`)
+      const r = await api.free(m.id).catch(() => null)
+      if (r?.found && r.file) {
+        try {
+          await api.addMovie(m.id, profile || undefined)
+          await api.attach(m.id, r.file)
+          toast.success(`Free copy found: ${r.why}`, { id: t, description: 'Added to your vault. Starting it now.' })
+          loadLibrary()
+          const { playMovie } = await import('@/lib/movie')
+          await playMovie(play, m, r.file)
+        } catch (e) { toast.error((e as Error).message, { id: t }) }
+        return
+      }
+      toast(`No free copy of ${m.title}`, { id: t, description: 'Paste a magnet link to add it.' })
+    }
+    setAdd({ open: true, movieId: m.id })
+  }, [profile, play, loadLibrary])
+  const ctx = useMemo(() => ({ prefs, setPrefs, play, profile: profile || 'tj', rate: setRating, playing: !!media, addOrAsk }), [prefs, setPrefs, play, profile, media, addOrAsk])
 
   if (!auth) return <div className="flex min-h-dvh items-center justify-center bg-[#07070a]"><Spinner className="size-6" /></div>
   if (!auth.ok) {

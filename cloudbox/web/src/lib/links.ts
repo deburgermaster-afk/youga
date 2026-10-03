@@ -6,6 +6,7 @@ export const setLinkToken = (t: string) => { linkToken = t }
 
 export function absolute(url: string, download = false) {
   const u = new URL(url, window.location.origin)
+  if (u.origin !== window.location.origin) return u.toString() // e.g. archive.org: never send our token
   if (linkToken) u.searchParams.set('t', linkToken)
   if (download) u.searchParams.set('download', '1')
   return u.toString()

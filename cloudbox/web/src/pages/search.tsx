@@ -46,7 +46,15 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
   onAdd: (movieId: number) => void
   onSettings: () => void
 }) {
-  const { play } = useApp()
+  const { play, addOrAsk } = useApp()
+  const [adding, setAdding] = useState<number | null>(null)
+  // Movies: play a free copy if there is one, else ask for a magnet. Series: ask.
+  const add = async (m: { id: number; title: string; tv?: boolean }) => {
+    if (m.tv) return onAdd(m.id)
+    setAdding(m.id)
+    await addOrAsk(m)
+    setAdding(null)
+  }
   const [q, setQ] = useState('')
   const [results, setResults] = useState<MovieLite[] | null>(null)
   const [trending, setTrending] = useState<MovieLite[] | null>(null)
@@ -107,7 +115,7 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
     if (m.pending?.some(id => jobs.some(j => j.id === id && j.status !== 'done'))) {
       return <span className="shrink-0 rounded-full bg-blue-500/20 px-2.5 py-1 text-[11px] font-semibold text-blue-300">Downloading</span>
     }
-    return <AddButton onClick={() => onAdd(m.id)} />
+    return <AddButton busy={adding === m.id} onClick={() => add(m)} />
   }
 
   return (
@@ -153,7 +161,7 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
               <Row key={m.id} id={m.id} poster={m.poster} title={m.title} onClick={() => onOpen(m.id)}
                 sub={[m.tv ? 'Series' : 'Movie', m.year].filter(Boolean).join(' · ')}
                 facts={<Facts meta={meta[m.id]} tmdb={m.rating} />}
-                action={<AddButton onClick={() => onAdd(m.id)} />} />
+                action={<AddButton busy={adding === m.id} onClick={() => add(m)} />} />
             ))}
           </section>
         </>
@@ -173,10 +181,10 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
   )
 }
 
-function AddButton({ onClick }: { onClick: () => void }) {
+function AddButton({ onClick, busy }: { onClick: () => void; busy?: boolean }) {
   return (
-    <button onClick={onClick} className="btn-black flex h-9 shrink-0 items-center gap-1 rounded-full px-3.5 text-[13px] font-semibold">
-      <Plus className="size-4 text-orange-400" strokeWidth={2.6} /> Add
+    <button onClick={onClick} disabled={busy} className="btn-black flex h-9 shrink-0 items-center gap-1 rounded-full px-3.5 text-[13px] font-semibold">
+      {busy ? <Spinner /> : <Plus className="size-4 text-orange-400" strokeWidth={2.6} />} Add
     </button>
   )
 }

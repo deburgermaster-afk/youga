@@ -227,7 +227,8 @@ async function resolveUrl(env: Env, job: Job) {
 
 // ---------- Movie library ----------
 const LIBRARY = '.cloudbox/library.json'
-type MovieFile = { source: 'torbox' | 'cloud'; torrentId?: number; fileId?: number; key?: string; name: string; size: number }
+// 'archive' = a free, legal copy streamed straight from the Internet Archive.
+type MovieFile = { source: 'torbox' | 'cloud' | 'archive'; torrentId?: number; fileId?: number; key?: string; url?: string; name: string; size: number }
 type Movie = {
   id: number
   imdbId?: string
@@ -268,7 +269,7 @@ async function updateLibrary(env: Env, fn: (movies: Movie[]) => Movie[] | void) 
 }
 
 const sameFile = (a: MovieFile, b: MovieFile) =>
-  a.source === b.source && (a.source === 'cloud' ? a.key === b.key : a.torrentId === b.torrentId && a.fileId === b.fileId)
+  a.source === b.source && (a.source === 'cloud' ? a.key === b.key : a.source === 'archive' ? a.url === b.url : a.torrentId === b.torrentId && a.fileId === b.fileId)
 
 async function attachFiles(env: Env, movieId: number, files: MovieFile[], jobId?: string) {
   await updateLibrary(env, list => {
@@ -421,6 +422,115 @@ async function seasonDetail(env: Env, id: number, n: number) {
       overview: e.overview || '', airDate: e.air_date || '', rating: Math.round((e.vote_average || 0) * 10) / 10,
     })),
   }
+}
+
+// ---------- Free & legal copies (Internet Archive) ----------
+// Only films we can be confident are free to watch:
+//  - in one of the Archive's curated public-domain film collections, or
+//  - released in 1930 or earlier (public domain in the US by age), or
+//  - Creative Commons and uploaded by the film's own studio, or made by a
+//    studio that releases everything under Creative Commons (Blender).
+// Open "Community Video" uploads claiming a free license are NOT trusted on
+// their own: people upload pirated films there with fake licenses.
+const ARCHIVE_FILE = /^https:\/\/archive\.org\/download\/[^/]+\/.+/
+const CURATED = new Set(['feature_films', 'silent_films', 'film_noir', 'SciFi_Horror', 'Comedy_Films', 'classic_cartoons', 'classic_tv', 'film_scifi'])
+const COLLECTION_NAME: Record<string, string> = { feature_films: 'Feature Films', silent_films: 'Silent Films', film_noir: 'Film Noir', SciFi_Horror: 'Sci-Fi / Horror', Comedy_Films: 'Comedy Films', classic_cartoons: 'Classic Cartoons', classic_tv: 'Classic TV', film_scifi: 'Sci-Fi' }
+const PD_YEAR = new Date().getFullYear() - 96 // US: published 95+ years ago
+
+const normTitle = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/^(the|a|an) /, '').trim()
+const list = <T,>(v: T | T[] | undefined) => (v === undefined ? [] : Array.isArray(v) ? v : [v])
+
+type Free = {
+  found: boolean
+  why?: string // "Public domain" / "Creative Commons (Blender Foundation)"
+  source?: string // collection or license, for display
+  page?: string
+  file?: MovieFile
+  checkedAt: number
+}
+
+async function freeCopy(env: Env, id: number): Promise<Free> {
+  if (id <= 0) return { found: false, checkedAt: Date.now() } // movies only
+  const key = `.cloudbox/cache/free/${id}.json`
+  const cached = await env.BUCKET.get(key)
+  if (cached) {
+    const c = (await cached.json()) as Free
+    if (Date.now() - c.checkedAt < (c.found ? 30 : 3) * 86400_000) return c
+  }
+  const result = await findFreeCopy(env, id).catch(() => ({ found: false, checkedAt: Date.now() }) as Free)
+  await env.BUCKET.put(key, JSON.stringify(result))
+  return result
+}
+
+async function findFreeCopy(env: Env, id: number): Promise<Free> {
+  const none: Free = { found: false, checkedAt: Date.now() }
+  const m = await tmdb<{ title: string; original_title?: string; release_date?: string; production_companies?: { name: string }[] }>(env, `/movie/${id}`)
+  const year = Number((m.release_date || '').slice(0, 4)) || 0
+  const titles = [...new Set([m.title, m.original_title].filter(Boolean).map(t => normTitle(t!)))]
+  const studios = (m.production_companies || []).map(c => normTitle(c.name)).filter(s => s.length > 3)
+  // Studios that release all their films under Creative Commons, so any copy may be shared.
+  const openStudio = (m.production_companies || []).find(c => /blender/i.test(c.name))?.name
+
+  const q = `title:(${JSON.stringify(m.title)}) AND mediatype:movies AND -collection:(movie_trailers)`
+  const u = new URL('https://archive.org/advancedsearch.php')
+  u.searchParams.set('q', q)
+  for (const f of ['identifier', 'title', 'year', 'date', 'downloads', 'collection', 'licenseurl', 'creator']) u.searchParams.append('fl[]', f)
+  u.searchParams.set('rows', '25')
+  u.searchParams.append('sort[]', 'downloads desc')
+  u.searchParams.set('output', 'json')
+  const r = await fetch(u.toString(), { cf: { cacheTtl: 86400, cacheEverything: true } } as RequestInit)
+  if (!r.ok) return none
+  type Doc = { identifier: string; title?: string; year?: string | number; date?: string; downloads?: number; collection?: string | string[]; licenseurl?: string; creator?: string | string[] }
+  const docs = ((await r.json()) as { response?: { docs?: Doc[] } }).response?.docs || []
+
+  const candidates = docs.flatMap(d => {
+    const t = normTitle(String(d.title || ''))
+    if (/\btrailer\b|\bteaser\b|\bclip\b|\breview\b|\bpodcast\b/.test(t)) return []
+    const y = Number(d.year) || Number(String(d.date || '').slice(0, 4)) || Number(/\b(18|19|20)\d\d\b/.exec(String(d.title))?.[0]) || 0
+    if (y && year && Math.abs(y - year) > 1) return []
+    // Exact title, or the title plus edition words ("restored", "1922"), or a
+    // short subtitle when the year matches too.
+    const titleOk = titles.some(x => {
+      if (t === x) return true
+      if (!t.startsWith(x + ' ')) return false
+      const rest = t.slice(x.length).trim()
+      return /^((19|20)\d\d|restored|remastered|complete|uncut|hd|dvd|quality|full|movie|film|colori[sz]ed|version|\d+p|\d+ mins?|\s)+$/.test(rest)
+        || (!!y && rest.split(' ').length <= 6)
+    })
+    if (!titleOk) return []
+    const cols = list(d.collection)
+    const curated = cols.find(c => CURATED.has(c))
+    const license = String(d.licenseurl || '')
+    const creators = list(d.creator).map(c => normTitle(String(c)))
+    const byStudio = /creativecommons\.org/.test(license) && studios.some(s => creators.some(c => c.includes(s) || s.includes(c)))
+    const byAge = year > 0 && year <= PD_YEAR
+    if (!curated && !byAge && !byStudio && !openStudio) return []
+    if (!y && !curated) return []
+    const why = curated || byAge ? 'Public domain' : `Creative Commons (${openStudio || list(d.creator)[0]})`
+    const source = curated ? `Internet Archive · ${COLLECTION_NAME[curated]}` : 'Internet Archive'
+    return [{ id: d.identifier, why, source }]
+  })
+
+  // First candidate with a video file a browser can play.
+  for (const c of candidates.slice(0, 3)) {
+    const md = await fetch(`https://archive.org/metadata/${encodeURIComponent(c.id)}`)
+    if (!md.ok) continue
+    const files = ((await md.json()) as { files?: { name: string; size?: string; format?: string }[] }).files || []
+    const vids = files
+      .filter(f => /\.(mp4|m4v|webm|mkv|ogv)$/i.test(f.name) && !/trailer|sample/i.test(f.name) && Number(f.size || 0) > 20_000_000)
+      // MP4 plays everywhere (iPhone too); otherwise the biggest file.
+      .sort((a, b) => Number(/\.(mp4|m4v)$/i.test(b.name)) - Number(/\.(mp4|m4v)$/i.test(a.name)) || Number(b.size || 0) - Number(a.size || 0))
+    const best = vids[0]
+    if (!best) continue
+    const url = `https://archive.org/download/${encodeURIComponent(c.id)}/${best.name.split('/').map(encodeURIComponent).join('/')}`
+    return {
+      found: true, why: c.why, source: c.source, page: `https://archive.org/details/${encodeURIComponent(c.id)}`,
+      file: { source: 'archive', url, name: best.name.split('/').pop() || best.name, size: Number(best.size || 0) },
+      checkedAt: Date.now(),
+    }
+  }
+  return none
 }
 
 // Small facts for search rows (IMDb rating, top cast), cached in R2 and in
@@ -879,6 +989,8 @@ export default {
       if (tm) return json(await titleDetail(env, Number(tm[1])), 200, cache(3600))
       const ts = /^\/api\/tmdb\/tv\/(\d+)\/season\/(\d+)$/.exec(path)
       if (ts) return json(await seasonDetail(env, Number(ts[1]), Number(ts[2])), 200, cache(3600))
+      const fr = /^\/api\/free\/(-?\d+)$/.exec(path)
+      if (fr) return json(await freeCopy(env, Number(fr[1])), 200, cache(3600))
       if (path === '/api/meta') {
         const ids = (url.searchParams.get('ids') || '').split(',').map(Number).filter(n => Number.isInteger(n) && n !== 0).slice(0, 12)
         return json(await metaFor(env, ids), 200, cache(86400))
@@ -911,7 +1023,8 @@ export default {
         if (req.method === 'POST' && lib[2] === '/attach') {
           const b = (await req.json().catch(() => ({}))) as MovieFile & { files?: MovieFile[] }
           const files = (b.files || [b]).filter(f => f && f.source && f.name)
-            .map(f => ({ source: f.source, torrentId: f.torrentId, fileId: f.fileId, key: f.key, name: f.name, size: f.size || 0 }))
+            .filter(f => f.source !== 'archive' || ARCHIVE_FILE.test(f.url || ''))
+            .map(f => ({ source: f.source, torrentId: f.torrentId, fileId: f.fileId, key: f.key, url: f.source === 'archive' ? f.url : undefined, name: f.name, size: f.size || 0 }))
           if (!files.length) return json({ error: 'Missing file' }, 400)
           await attachFiles(env, id, files)
           return json({ ok: true })

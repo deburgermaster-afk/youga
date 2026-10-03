@@ -12,7 +12,7 @@ import { Poster } from '@/components/poster'
 import { Episodes } from '@/components/episodes'
 import { TrailerBackground } from '@/components/trailer'
 import { WideProgress } from '@/components/wide-progress'
-import { api, bytes, img, movieFileUrl, type Job, type Movie, type MovieDetail, type MovieFile } from '@/lib/api'
+import { api, bytes, img, movieFileUrl, type FreeCopy, type Job, type Movie, type MovieDetail, type MovieFile } from '@/lib/api'
 import { absolute, copy, kmplayer, openInApp, platform, playersFor } from '@/lib/links'
 import { useApp } from '@/lib/app-context'
 import { kind, playMovie, pr, prText } from '@/lib/movie'
@@ -32,7 +32,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
   onAddFile: (movieId: number) => void
   onChanged: () => void
 }) {
-  const { play, profile, rate, playing } = useApp()
+  const { play, profile, rate, playing, addOrAsk } = useApp()
   const [d, setD] = useState<MovieDetail | null>(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -48,6 +48,17 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
   const upNext = isTv ? nextEpisode(profile, eps) : null
   const file = isTv ? (upNext?.ep.f ?? entry?.files[0]) : entry?.files[0]
   const pending = jobs.filter(j => entry?.pending?.includes(j.id) && j.status !== 'done')
+
+  // Movies without a file: look for a free, legal copy up front.
+  const [free, setFree] = useState<FreeCopy | null>(null)
+  const [adding, setAdding] = useState(false)
+  const needsFile = id > 0 && !entry?.files.length && !entry?.pending?.length
+  useEffect(() => {
+    if (!needsFile) return
+    let live = true
+    api.free(id).then(r => live && setFree(r)).catch(() => live && setFree({ found: false }))
+    return () => { live = false }
+  }, [id, needsFile])
 
   useEffect(() => {
     setD(null)
@@ -223,14 +234,36 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
             <p className="text-xs text-white/60">Downloading. Play shows up here when it’s done.</p>
           </div>
         ) : (
-          <div className="flex gap-2">
-            <button onClick={() => onAddFile(id)} className="btn-black flex h-12 flex-1 items-center justify-center gap-2 rounded-full text-[15px] font-semibold">
-              <Plus className="size-5 text-orange-400" strokeWidth={2.5} /> {isTv ? 'Add series' : 'Add movie'}
-            </button>
-            {!entry && (
-              <button onClick={addToVault} disabled={busy} className="btn-black flex h-12 items-center justify-center gap-2 rounded-full px-5 text-[15px] font-semibold">
-                <Bookmark className="size-[18px]" /> Save
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <button
+                disabled={adding}
+                onClick={async () => {
+                  if (isTv) return onAddFile(id)
+                  setAdding(true)
+                  await addOrAsk({ id, title: t?.title || '' })
+                  setAdding(false)
+                }}
+                className="btn-black flex h-12 flex-1 items-center justify-center gap-2 rounded-full text-[15px] font-semibold"
+              >
+                {adding ? <Spinner /> : free?.found
+                  ? <Play className="size-5 fill-orange-400 text-orange-400" />
+                  : <Plus className="size-5 text-orange-400" strokeWidth={2.5} />}
+                {isTv ? 'Add series' : free?.found ? 'Play free' : 'Add movie'}
               </button>
+              {!entry && (
+                <button onClick={addToVault} disabled={busy} className="btn-black flex h-12 items-center justify-center gap-2 rounded-full px-5 text-[15px] font-semibold">
+                  <Bookmark className="size-[18px]" /> Save
+                </button>
+              )}
+            </div>
+            {!isTv && (
+              <p className="px-1 text-[12px] text-white/50">
+                {!free ? 'Checking for a free, legal copy…'
+                  : free.found
+                    ? <>Free & legal: <span className="text-emerald-400">{free.why}</span> · <a href={free.page} target="_blank" rel="noreferrer" className="underline underline-offset-2">{free.source}</a>{free.file?.size ? ` · ${bytes(free.file.size)}` : ''}</>
+                    : 'No free copy found. Add movie asks for a magnet link.'}
+              </p>
             )}
           </div>
         )}
@@ -301,7 +334,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
                 <div key={`${f.source}${f.key}${f.torrentId}${f.fileId}`} className="glass flex items-center gap-2 rounded-2xl p-2 pl-3">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm">{f.name}</p>
-                    <p className="font-mono text-[11px] text-emerald-400">{bytes(f.size)} <span className="text-white/50">· {f.source === 'torbox' ? 'TorBox' : 'Cloud'}</span></p>
+                    <p className="font-mono text-[11px] text-emerald-400">{bytes(f.size)} <span className="text-white/50">· {f.source === 'torbox' ? 'TorBox' : f.source === 'archive' ? 'Internet Archive' : 'Cloud'}</span></p>
                   </div>
                   <button className="btn-black flex size-9 items-center justify-center rounded-full" aria-label="Play" onClick={() => playFile(f)}><Play className="size-4 fill-white" /></button>
                   <button className="flex size-9 items-center justify-center rounded-full text-white/70" aria-label="Unlink" onClick={async () => { await api.detach(id, f); onChanged() }}><Trash2 className="size-4" /></button>

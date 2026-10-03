@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Check, Search } from 'lucide-react'
+import { Check, Play, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
@@ -8,7 +8,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Panel } from '@/components/panel'
-import { api, bytes, img, type Entry, type Movie, type MovieLite } from '@/lib/api'
+import { api, bytes, img, type Entry, type FreeCopy, type Movie, type MovieLite } from '@/lib/api'
 import { useApp } from '@/lib/app-context'
 import { cn } from '@/lib/utils'
 
@@ -49,13 +49,23 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
   library: Movie[]
   onDone: () => void
 }) {
-  const { profile } = useApp()
+  const { profile, addOrAsk } = useApp()
   const [link, setLink] = useState('')
   const [movie, setMovie] = useState<MovieLite | null>(null)
   const [choices, setChoices] = useState<MovieLite[]>([])
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
   const [existing, setExisting] = useState<Entry[] | null>(null)
+  // A free, legal copy of the chosen movie means no link is needed.
+  const [free, setFree] = useState<FreeCopy | null>(null)
+  const freeFor = movie && !movie.tv && movie.id > 0 ? movie.id : 0
+  useEffect(() => {
+    setFree(null)
+    if (!freeFor) return
+    let live = true
+    api.free(freeFor).then(r => live && setFree(r)).catch(() => {})
+    return () => { live = false }
+  }, [freeFor])
 
   // Reset; preselect the movie when opened from its page.
   useEffect(() => {
@@ -170,6 +180,17 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
         </TabsList>
         <TabsContent value="link">
           <FieldGroup>
+            {free?.found && movie && (
+              <div className="glass flex items-center gap-3 rounded-2xl p-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold">Free copy available</p>
+                  <p className="truncate text-xs text-white/55"><span className="text-emerald-400">{free.why}</span> · {free.source}</p>
+                </div>
+                <button onClick={() => { onOpenChange(false); void addOrAsk(movie) }} className="btn-black flex h-10 shrink-0 items-center gap-1.5 rounded-full px-4 text-sm font-semibold">
+                  <Play className="size-4 fill-orange-400 text-orange-400" /> Add & play
+                </button>
+              </div>
+            )}
             <Field>
               <FieldLabel htmlFor="link">Magnet or link</FieldLabel>
               <Textarea id="link" value={link} onChange={e => setLink(e.target.value)} placeholder="magnet:?xt=urn:btih:… or https://…" className="min-h-24 font-mono text-sm" autoComplete="off" spellCheck={false} />
