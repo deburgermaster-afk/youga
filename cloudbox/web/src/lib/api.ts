@@ -54,6 +54,18 @@ export type Movie = {
 }
 
 const titles = new Map<number, Promise<MovieDetail>>()
+// Synchronous caches so screens render instantly with what we already know.
+const details = new Map<number, MovieDetail>()
+const lites = new Map<number, MovieLite>()
+const searches = new Map<string, MovieLite[]>()
+let trendingList: MovieLite[] | null = null
+const seed = (list: MovieLite[]) => { for (const m of list) if (!lites.has(m.id)) lites.set(m.id, m) }
+export const peek = {
+  movie: (id: number) => details.get(id) ?? null,
+  lite: (id: number) => details.get(id) ?? lites.get(id) ?? null,
+  search: (q: string) => searches.get(q.trim().toLowerCase()) ?? null,
+  trending: () => trendingList,
+}
 const frees = new Map<number, Promise<FreeCopy>>()
 export const prefetchTitle = (id: number) => { api.movie(id).catch(() => {}) }
 
@@ -94,12 +106,18 @@ export const api = {
   detach: (id: number, f: MovieFile) => req(`/api/library/${id}/detach`, post(f)),
   rate: (id: number, by: string, value: number) => req(`/api/library/${id}/rate`, post({ by, value })),
   watched: (id: number, by: string) => req(`/api/library/${id}/watched`, post({ by })),
-  search: (q: string) => req<{ results: MovieLite[] }>(`/api/tmdb/search?q=${encodeURIComponent(q)}`),
-  trending: () => req<{ results: MovieLite[] }>('/api/tmdb/trending'),
+  search: (q: string) => req<{ results: MovieLite[] }>(`/api/tmdb/search?q=${encodeURIComponent(q)}`)
+    .then(r => { searches.set(q.trim().toLowerCase(), r.results); seed(r.results); return r }),
+  trending: () => req<{ results: MovieLite[] }>('/api/tmdb/trending')
+    .then(r => { trendingList = r.results; seed(r.results); return r }),
   // Title pages are fetched once and kept, so opening one again (or after a prefetch) is instant.
   movie: (id: number) => {
     let p = titles.get(id)
-    if (!p) { p = req<MovieDetail>(`/api/tmdb/title/${id}`); p.catch(() => titles.delete(id)); titles.set(id, p) }
+    if (!p) {
+      p = req<MovieDetail>(`/api/tmdb/title/${id}`)
+      p.then(d => { details.set(id, d); seed(d.similar) }, () => titles.delete(id))
+      titles.set(id, p)
+    }
     return p
   },
   season: (tvId: number, n: number) => req<{ episodes: Episode[] }>(`/api/tmdb/tv/${Math.abs(tvId)}/season/${n}`),

@@ -31,8 +31,9 @@ export function TimelinePage({ library, onOpen }: { library: Movie[] | null; onO
               <span className="text-xs text-white/45">{movies.length}</span>
             </div>
             <div className="grid grid-cols-3 gap-x-2.5 gap-y-3 px-4 sm:grid-cols-4 md:grid-cols-6">
-              {movies.map(m => (
+              {movies.map((m, i) => (
                 <Poster
+                  index={i}
                   key={m.id}
                   id={m.id}
                   title={m.title}

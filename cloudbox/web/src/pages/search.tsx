@@ -3,9 +3,12 @@ import { Play, Plus, Search, Star, X } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { MetaLine, Poster } from '@/components/poster'
-import { api, img, prefetchTitle, type Job, type Meta, type Movie, type MovieLite } from '@/lib/api'
+import { api, peek, img, prefetchTitle, type Job, type Meta, type Movie, type MovieLite } from '@/lib/api'
 import { useApp } from '@/lib/app-context'
 import { kind, playMovie, pr, prText } from '@/lib/movie'
+
+// Coming back to Search keeps what you last looked for.
+let lastQuery = ''
 
 const norm = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim()
 
@@ -21,9 +24,9 @@ function Facts({ meta, tmdb }: { meta?: Meta; tmdb?: number }) {
   )
 }
 
-function Row({ id, poster, title, sub, facts, action, onClick }: { id: number; poster?: string; title: string; sub: React.ReactNode; facts: React.ReactNode; action: React.ReactNode; onClick: () => void }) {
+function Row({ id, index = 0, poster, title, sub, facts, action, onClick }: { id: number; index?: number; poster?: string; title: string; sub: React.ReactNode; facts: React.ReactNode; action: React.ReactNode; onClick: () => void }) {
   return (
-    <div className="glass flex items-center gap-3 rounded-2xl p-1.5 pr-2.5">
+    <div className="glass stagger flex items-center gap-3 rounded-2xl p-1.5 pr-2.5 transition-transform active:scale-[0.98]" style={{ '--i': index } as React.CSSProperties}>
       <button onClick={onClick} onPointerDown={() => prefetchTitle(id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
         <div className="h-[78px] w-[52px] shrink-0 overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
           {poster && <img src={img(poster, 'w185')} alt="" loading="lazy" decoding="async" className="size-full object-cover" />}
@@ -55,22 +58,23 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
     await addOrAsk(m)
     setAdding(null)
   }
-  const [q, setQ] = useState('')
-  const [results, setResults] = useState<MovieLite[] | null>(null)
-  const [trending, setTrending] = useState<MovieLite[] | null>(null)
+  const [q, setQ] = useState(lastQuery)
+  const [results, setResults] = useState<MovieLite[] | null>(() => peek.search(lastQuery))
+  const [trending, setTrending] = useState<MovieLite[] | null>(peek.trending)
   const [err, setErr] = useState('')
   const [starting, setStarting] = useState<number | null>(null)
   const [meta, setMeta] = useState<Record<string, Meta>>({})
   const input = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    input.current?.focus()
+    if (!lastQuery) input.current?.focus()
     api.trending().then(r => setTrending(r.results)).catch(e => setErr((e as Error).message))
   }, [])
 
   // Search as you type (debounced).
   useEffect(() => {
-    setResults(null)
+    lastQuery = q
+    setResults(peek.search(q))
     if (!q.trim()) return
     const id = setTimeout(() => {
       api.search(q).then(r => { setResults(r.results); setErr('') }).catch(e => setErr((e as Error).message))
@@ -145,8 +149,8 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
           {mine.length > 0 && (
             <section className="space-y-2">
               <h2 className="font-display text-[17px] font-bold tracking-tight">In your vault</h2>
-              {mine.map(m => (
-                <Row key={m.id} id={m.id} poster={m.poster} title={m.title} onClick={() => onOpen(m.id)}
+              {mine.map((m, i) => (
+                <Row key={m.id} index={i} id={m.id} poster={m.poster} title={m.title} onClick={() => onOpen(m.id)}
                   sub={<MetaLine parts={[m.tv ? 'Series' : kind(m.genres), m.year]} pr={prText(pr(m))} />}
                   facts={<Facts meta={meta[m.id]} tmdb={m.rating} />}
                   action={vaultAction(m)} />
@@ -157,8 +161,8 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
             <h2 className="font-display text-[17px] font-bold tracking-tight">{mine.length ? 'More from TMDB' : 'Results'}</h2>
             {!others && !err && Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[90px] rounded-2xl" />)}
             {others?.length === 0 && <p className="text-sm text-white/55">{mine.length ? 'Nothing else found.' : 'No movies found.'}</p>}
-            {others?.map(m => (
-              <Row key={m.id} id={m.id} poster={m.poster} title={m.title} onClick={() => onOpen(m.id)}
+            {others?.map((m, i) => (
+              <Row key={m.id} index={i + mine.length} id={m.id} poster={m.poster} title={m.title} onClick={() => onOpen(m.id)}
                 sub={[m.tv ? 'Series' : 'Movie', m.year].filter(Boolean).join(' · ')}
                 facts={<Facts meta={meta[m.id]} tmdb={m.rating} />}
                 action={<AddButton busy={adding === m.id} onClick={() => add(m)} />} />
@@ -170,8 +174,8 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
           <h2 className="font-display text-[17px] font-bold tracking-tight">Trending this week</h2>
           <div className="grid grid-cols-3 gap-x-2.5 gap-y-3 sm:grid-cols-5 lg:grid-cols-7">
             {!trending && !err && Array.from({ length: 9 }, (_, i) => <Skeleton key={i} className="aspect-[2/3] rounded-2xl" />)}
-            {trending?.map(m => (
-              <Poster key={m.id} id={m.id} title={m.title} poster={m.poster} sub={[m.tv ? 'Series' : '', m.year].filter(Boolean).join(' · ')} rating={m.rating} onClick={() => onOpen(m.id)}
+            {trending?.map((m, i) => (
+              <Poster key={m.id} index={i} id={m.id} title={m.title} poster={m.poster} sub={[m.tv ? 'Series' : '', m.year].filter(Boolean).join(' · ')} rating={m.rating} onClick={() => onOpen(m.id)}
                 badge={library.some(x => x.id === m.id) ? <span className="rounded-full bg-orange-500 px-2 py-0.5 text-[10px] font-semibold">Vault</span> : undefined} />
             ))}
           </div>

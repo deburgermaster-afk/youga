@@ -14,7 +14,7 @@ const ITEMS = [
 export function Dock({ page, onPage, onAdd, badge = 0 }: { page: Page; onPage: (p: Page) => void; onAdd: () => void; badge?: number }) {
   const index = ITEMS.findIndex(it => it.id === page)
   return (
-    <nav className="fixed inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-40 flex items-center gap-2.5 px-3">
+    <nav className="fixed inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-40 flex items-center gap-2.5 px-3 [view-transition-name:dock]">
       <div className="dock-bar relative flex h-14 flex-1 items-center rounded-full p-1">
         {/* Sliding highlight behind the active icon */}
         {index >= 0 && (

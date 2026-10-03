@@ -53,8 +53,9 @@ export function HomePage({ library, jobs, refresh, onOpen, onSearch, onAdd }: {
       {continueRows.length > 0 && (
         <Section title="Continue watching">
           <div className="scrollbar-none flex gap-2.5 overflow-x-auto px-4">
-            {continueRows.map(({ p, m }) => (
+            {continueRows.map(({ p, m }, i) => (
               <Poster
+                index={i}
                 key={p.url}
                 className="w-[104px] shrink-0"
                 title={m?.title || p.name}
@@ -77,8 +78,9 @@ export function HomePage({ library, jobs, refresh, onOpen, onSearch, onAdd }: {
       {library.length > 0 ? (
         <Section title="Your vault" aside={`${library.length} title${library.length === 1 ? '' : 's'}`}>
           <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-            {library.map(m => (
+            {library.map((m, i) => (
               <Poster
+                index={i}
                 key={m.id}
                 id={m.id}
                 big

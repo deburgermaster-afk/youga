@@ -12,7 +12,7 @@ import { Poster } from '@/components/poster'
 import { Episodes } from '@/components/episodes'
 import { TrailerBackground } from '@/components/trailer'
 import { WideProgress } from '@/components/wide-progress'
-import { api, bytes, img, movieFileUrl, type FreeCopy, type Job, type Movie, type MovieDetail, type MovieFile } from '@/lib/api'
+import { api, peek, bytes, img, movieFileUrl, type FreeCopy, type Job, type Movie, type MovieDetail, type MovieFile } from '@/lib/api'
 import { absolute, copy, kmplayer, openInApp, platform, playersFor } from '@/lib/links'
 import { useApp } from '@/lib/app-context'
 import { kind, playMovie, pr, prText } from '@/lib/movie'
@@ -33,7 +33,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
   onChanged: () => void
 }) {
   const { play, profile, rate, playing, addOrAsk } = useApp()
-  const [d, setD] = useState<MovieDetail | null>(null)
+  const [d, setD] = useState<MovieDetail | null>(() => peek.movie(id))
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [starting, setStarting] = useState(false)
@@ -61,14 +61,15 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
   }, [id, needsFile])
 
   useEffect(() => {
-    setD(null)
+    setD(peek.movie(id))
     setErr('')
     setTi(0)
     window.scrollTo({ top: 0 })
     api.movie(id).then(setD).catch(e => setErr((e as Error).message))
   }, [id])
 
-  const t = d ?? (entry ? { ...entry, year: entry.year || '', poster: entry.poster || '', backdrop: entry.backdrop || '', rating: entry.rating || 0, overview: entry.overview || '' } : null)
+  // Show what we already know (vault entry or the list it was tapped in) right away.
+  const t = d ?? (entry ? { ...entry, year: entry.year || '', poster: entry.poster || '', backdrop: entry.backdrop || '', rating: entry.rating || 0, overview: entry.overview || '' } : peek.lite(id))
   const genres = d?.genres || entry?.genres
   const runtime = d?.runtime || entry?.runtime || 0
   const trailer = d?.trailers[ti]
@@ -307,7 +308,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
           )}
           <TabsContent value="similar">
             <div className="grid grid-cols-3 gap-x-2.5 gap-y-3 sm:grid-cols-5">
-              {d?.similar.map(m => <Poster key={m.id} id={m.id} title={m.title} poster={m.poster} sub={m.year} rating={m.rating} onClick={() => onOpen(m.id)} />)}
+              {d?.similar.map((m, i) => <Poster key={m.id} index={i} id={m.id} title={m.title} poster={m.poster} sub={m.year} rating={m.rating} onClick={() => onOpen(m.id)} />)}
             </div>
             {d && !d.similar.length && <p className="text-sm text-white/50">Nothing similar found.</p>}
           </TabsContent>

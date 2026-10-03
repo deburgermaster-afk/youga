@@ -2,8 +2,9 @@ import { Star } from 'lucide-react'
 import { img, prefetchTitle } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-export function Poster({ id, title, poster, sub, rating, badge, progress, onClick, onRate, rated, big, className }: {
+export function Poster({ id, index, title, poster, sub, rating, badge, progress, onClick, onRate, rated, big, className }: {
   id?: number // prefetches the title page on touch
+  index?: number // position in a list, for the staggered entrance
   title: string
   poster?: string
   sub?: React.ReactNode // line under the title, e.g. "Drama · 2014 · PR 8"
@@ -17,10 +18,10 @@ export function Poster({ id, title, poster, sub, rating, badge, progress, onClic
   className?: string
 }) {
   return (
-    <div className={cn('group relative w-full', className)}>
+    <div className={cn('group relative w-full', index !== undefined && 'stagger', className)} style={index !== undefined ? ({ '--i': index } as React.CSSProperties) : undefined}>
       <button onClick={onClick} onPointerDown={id ? () => prefetchTitle(id) : undefined} className="block w-full text-left">
         <div className={cn(
-          'relative aspect-[2/3] overflow-hidden bg-white/5 ring-1 ring-white/10 transition-transform duration-300 group-active:scale-[0.97]',
+          'relative aspect-[2/3] overflow-hidden bg-white/5 ring-1 ring-white/10 transition-transform duration-300 group-active:scale-[0.95] group-active:brightness-90',
           big ? 'rounded-[20px] shadow-[0_12px_30px_rgba(0,0,0,0.45)]' : 'rounded-2xl',
         )}>
           {poster

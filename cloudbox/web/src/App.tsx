@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { ArrowLeft, Settings2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Spinner } from '@/components/ui/spinner'
@@ -7,6 +8,11 @@ import { GlowBackground } from '@/components/glow-bg'
 import { Dock, type Page } from '@/components/dock'
 import type { RateTarget } from '@/components/rate-sheet'
 import { HomePage } from '@/pages/home'
+import { MoviePage } from '@/pages/movie'
+import { SearchPage } from '@/pages/search'
+import { TimelinePage } from '@/pages/timeline'
+import { ContributionsPage } from '@/pages/contributions'
+import { SettingsPage } from '@/pages/settings'
 import { LoginPage } from '@/pages/login'
 import { ProfilesPage } from '@/pages/profiles'
 import { useJobs } from '@/hooks/use-jobs'
@@ -17,22 +23,14 @@ import { AppContext, type Media } from '@/lib/app-context'
 import { cn } from '@/lib/utils'
 
 // Everything but the home screen loads in the background, so the app opens fast.
+// Screens are bundled in (no spinner when switching); only rarely used
+// panels load separately, fetched right after start.
 const load = {
-  movie: () => import('@/pages/movie'),
-  search: () => import('@/pages/search'),
-  timeline: () => import('@/pages/timeline'),
-  contributions: () => import('@/pages/contributions'),
-  settings: () => import('@/pages/settings'),
   files: () => import('@/pages/files'),
   player: () => import('@/components/player'),
   add: () => import('@/components/add-sheet'),
   rate: () => import('@/components/rate-sheet'),
 }
-const MoviePage = lazy(() => load.movie().then(m => ({ default: m.MoviePage })))
-const SearchPage = lazy(() => load.search().then(m => ({ default: m.SearchPage })))
-const TimelinePage = lazy(() => load.timeline().then(m => ({ default: m.TimelinePage })))
-const ContributionsPage = lazy(() => load.contributions().then(m => ({ default: m.ContributionsPage })))
-const SettingsPage = lazy(() => load.settings().then(m => ({ default: m.SettingsPage })))
 const FilesPage = lazy(() => load.files().then(m => ({ default: m.FilesPage })))
 const Player = lazy(() => load.player().then(m => ({ default: m.Player })))
 const AddSheet = lazy(() => load.add().then(m => ({ default: m.AddSheet })))
@@ -45,6 +43,17 @@ const remembered = <T,>(key: string): T | null => { try { return JSON.parse(loca
 const remember = (key: string, v: unknown) => { try { localStorage.setItem(key, JSON.stringify(v)) } catch { /* full or blocked */ } }
 
 type Overlay = { type: 'movie'; id: number } | { type: 'files' } | null
+
+// Animated screen changes (View Transitions); plain switch where unsupported.
+type VTDoc = Document & { startViewTransition?: (cb: () => void) => unknown }
+const canTransition = typeof document !== 'undefined' && !!(document as VTDoc).startViewTransition
+  && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+function transition(kind: 'open' | 'back' | 'tab', update: () => void) {
+  const doc = document as VTDoc
+  if (!canTransition || !doc.startViewTransition) return update()
+  document.documentElement.dataset.vt = kind
+  doc.startViewTransition(() => flushSync(update))
+}
 
 export default function App() {
   const [auth, setAuth] = useState<{ required: boolean; ok: boolean } | null>(() => remembered(AUTH))
@@ -66,10 +75,8 @@ export default function App() {
       remember(AUTH, a.ok ? a : null)
     }).catch(() => setAuth(a => a ?? { required: false, ok: true }))
     // Warm up the other screens once the first one is up.
-    const warm = () => Object.values(load).forEach(f => f().catch(() => {}))
-    const w = window as Window & { requestIdleCallback?: (cb: () => void) => number }
-    if (w.requestIdleCallback) w.requestIdleCallback(warm)
-    else setTimeout(warm, 1200)
+    Object.values(load).forEach(f => f().catch(() => {}))
+    api.trending().catch(() => {})
   }, [])
 
   const loadLibrary = useCallback(() => {
@@ -83,11 +90,10 @@ export default function App() {
   // Overlays (movie page, files) work with the phone's back button.
   const setOverlay = useCallback((o: Overlay) => {
     if (o) history.pushState({ overlay: o }, '')
-    setOverlayState(o)
-    window.scrollTo({ top: 0 })
+    transition('open', () => { setOverlayState(o); window.scrollTo({ top: 0 }) })
   }, [])
   useEffect(() => {
-    const onPop = (e: PopStateEvent) => setOverlayState((e.state?.overlay as Overlay) ?? null)
+    const onPop = (e: PopStateEvent) => transition('back', () => setOverlayState((e.state?.overlay as Overlay) ?? null))
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
@@ -141,7 +147,7 @@ export default function App() {
 
   const me = profileById(profile)!
   const active = (jobs ?? []).filter(j => j.status === 'copying' || j.status === 'queued' || j.status === 'remote').length
-  const goto = (p: Page) => { if (overlay) setOverlayState(null); setPage(p); window.scrollTo({ top: 0 }) }
+  const goto = (p: Page) => transition('tab', () => { if (overlay) setOverlayState(null); setPage(p); window.scrollTo({ top: 0 }) })
   const openMovie = (id: number) => setOverlay({ type: 'movie', id })
   const switchProfile = () => { setSessionProfile(null); setProfile(null); setOverlayState(null); setPage('home') }
 
@@ -149,7 +155,7 @@ export default function App() {
     <AppContext.Provider value={ctx}>
       <GlowBackground />
 
-      <Suspense fallback={<div className="flex min-h-dvh items-center justify-center"><Spinner className="size-6" /></div>}>
+      <Suspense fallback={null}>
       {overlay?.type === 'movie' ? (
         <MoviePage
           key={overlay.id}
@@ -171,7 +177,7 @@ export default function App() {
         </div>
       ) : (
         <>
-          <header className="sticky top-0 z-30 pt-[env(safe-area-inset-top)]">
+          <header className="sticky top-0 z-30 pt-[env(safe-area-inset-top)] [view-transition-name:header]">
             <div aria-hidden className="absolute inset-0 bg-[#07070a]/75 backdrop-blur-xl [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" />
             <div className="relative flex h-[60px] items-center justify-between px-4">
               <button onClick={() => goto('home')} className="flex items-baseline gap-1" aria-label="Seedbox home">
@@ -188,7 +194,7 @@ export default function App() {
               </div>
             </div>
           </header>
-          <main className="pt-1 animate-in fade-in-0 duration-300" key={page}>
+          <main className={cn('pt-1', !canTransition && 'animate-in fade-in-0 duration-300')} key={page}>
             {page === 'home' && (
               <HomePage library={library} jobs={jobs} refresh={() => { refresh(); loadLibrary() }} onOpen={openMovie} onSearch={() => goto('search')} onAdd={() => setAdd({ open: true })} />
             )}
