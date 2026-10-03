@@ -1,41 +1,48 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
-import { Activity, ArrowDownToLine, HardDrive, Settings2, Sprout, Users, Zap } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Background } from '@/components/background'
-import { SpeedDial } from '@/components/speed-dial'
-import { Sparkline } from '@/components/sparkline'
-import { AddTorrent } from '@/components/add-torrent'
-import { TorrentCard } from '@/components/torrent-card'
-import { DiskBrowser } from '@/components/disk-browser'
-import { SettingsPanel } from '@/components/settings-panel'
+import { AddTorrent, addMany } from '@/components/add-torrent'
 import { Player } from '@/components/player'
-import { Login } from '@/components/login'
+import { TorrentPanel } from '@/components/torrent-panel'
+import { DownloadsPage } from '@/pages/downloads'
+import { FilesPage } from '@/pages/files'
+import { LogsPage } from '@/pages/logs'
+import { SettingsPage } from '@/pages/settings'
+import { LoginPage } from '@/pages/login'
 import { useLive } from '@/hooks/use-live'
-import { api, bytes } from '@/lib/api'
+import { api, bytes, speed } from '@/lib/api'
 import { loadPrefs, savePrefs, setLinkToken, type Prefs } from '@/lib/links'
 import { AppContext, type Media } from '@/lib/app-context'
 import { cn } from '@/lib/utils'
 
-function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl bg-white/[0.03] px-3 py-2.5">
-      <div className="flex size-8 items-center justify-center rounded-lg bg-white/5">{icon}</div>
-      <div className="min-w-0">
-        <div className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</div>
-        <div className="font-mono text-sm font-semibold tabular-nums">{value}</div>
-      </div>
-    </div>
-  )
+// Charts are heavy; load the Stats page only when opened.
+const StatsPage = lazy(() => import('@/pages/stats').then(m => ({ default: m.StatsPage })))
+
+const PAGES = [
+  { id: 'downloads', label: 'Downloads' },
+  { id: 'files', label: 'Files' },
+  { id: 'stats', label: 'Stats' },
+  { id: 'logs', label: 'Logs' },
+  { id: 'settings', label: 'Settings' },
+] as const
+
+const PAGE_KEY = 'seedbox:page'
+const initialPage = () => {
+  try { return localStorage.getItem(PAGE_KEY) || 'downloads' } catch { return 'downloads' }
 }
 
 export default function App() {
   const [auth, setAuth] = useState<{ required: boolean; ok: boolean } | null>(null)
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs)
   const [media, setMedia] = useState<Media | null>(null)
-  const [tab, setTab] = useState('torrents')
-  const { data, connected, history } = useLive(!!auth?.ok)
+  const [page, setPage] = useState(initialPage)
+  const [adding, setAdding] = useState(false)
+  const [openHash, setOpenHash] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const { data, connected, history, logs, clearLogs } = useLive(!!auth?.ok)
 
   useEffect(() => {
     api.me().then(m => {
@@ -44,122 +51,134 @@ export default function App() {
     }).catch(() => setAuth({ required: false, ok: true }))
   }, [])
 
+  const goto = (p: string) => {
+    setPage(p)
+    window.scrollTo({ top: 0 })
+    try { localStorage.setItem(PAGE_KEY, p) } catch { /* ignore */ }
+  }
+
   const setPrefs = useCallback((p: Prefs) => { setPrefsState(p); savePrefs(p) }, [])
   const ctx = useMemo(() => ({ prefs, setPrefs, play: setMedia }), [prefs, setPrefs])
 
-  const stats = data?.stats
-  const torrents = data?.torrents ?? []
-  const diskUsed = stats ? stats.disk.total - stats.disk.free : 0
-  const diskPct = stats?.disk.total ? (diskUsed / stats.disk.total) * 100 : 0
+  // Drop .torrent files or magnet links anywhere.
+  useEffect(() => {
+    if (!auth?.ok) return
+    const over = (e: DragEvent) => { e.preventDefault(); setDragging(true) }
+    const leave = (e: DragEvent) => { if (!e.relatedTarget) setDragging(false) }
+    const drop = (e: DragEvent) => {
+      e.preventDefault()
+      setDragging(false)
+      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.name.endsWith('.torrent'))
+      const text = e.dataTransfer?.getData('text') || ''
+      const magnets = text.split(/\s+/).filter(s => s.startsWith('magnet:'))
+      if (files.length || magnets.length) addMany([...files, ...magnets])
+    }
+    window.addEventListener('dragover', over)
+    window.addEventListener('dragleave', leave)
+    window.addEventListener('drop', drop)
+    return () => {
+      window.removeEventListener('dragover', over)
+      window.removeEventListener('dragleave', leave)
+      window.removeEventListener('drop', drop)
+    }
+  }, [auth?.ok])
 
-  if (!auth) return <Background />
+  if (!auth) {
+    return <div className="flex min-h-dvh items-center justify-center"><Spinner className="size-6" /></div>
+  }
   if (!auth.ok) {
     return (
       <>
-        <Background />
-        <Login onDone={tok => { setLinkToken(tok); setAuth({ required: true, ok: true }) }} />
+        <LoginPage onDone={tok => { setLinkToken(tok); setAuth({ required: true, ok: true }) }} />
+        <Toaster theme="dark" position="top-center" />
       </>
     )
   }
 
+  const stats = data?.stats
+  const torrents = data?.torrents ?? []
+  const openTorrent = torrents.find(t => t.infoHash === openHash) ?? null
+
+  const nav = (className: string, mobile: boolean) => (
+    <TabsList
+      variant="line"
+      className={cn(className, mobile
+        ? 'h-auto w-full rounded-none bg-black p-0'
+        : 'h-10 gap-1 bg-transparent p-0')}
+    >
+      {PAGES.map(p => (
+        <TabsTrigger
+          key={p.id}
+          value={p.id}
+          className={cn(mobile
+            ? 'h-14 flex-1 rounded-none border-0 px-0 text-[13px] after:hidden data-[state=active]:font-semibold data-[state=active]:shadow-[inset_0_2px_0_0_var(--foreground)]'
+            : 'h-10 flex-none px-3 text-sm')}
+        >
+          {p.label}
+        </TabsTrigger>
+      ))}
+    </TabsList>
+  )
+
   return (
     <AppContext.Provider value={ctx}>
-      <Background intensity={(stats?.downloadSpeed ?? 0) / (5 * 1024 * 1024)} />
-      <div className="mx-auto max-w-6xl px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-16 sm:px-6">
-        <header className="flex items-center justify-between py-4">
-          <motion.div initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-violet-500 shadow-lg shadow-cyan-500/30">
-              <ArrowDownToLine className="size-5 text-slate-950" strokeWidth={2.5} />
-            </div>
-            <div>
-              <h1 className="bg-gradient-to-r from-white to-white/60 bg-clip-text text-lg font-bold tracking-tight text-transparent">Seedbox</h1>
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className={cn('relative flex size-2')}>
-                  {connected && <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-75" />}
-                  <span className={cn('relative inline-flex size-2 rounded-full', connected ? 'bg-emerald-400' : 'bg-amber-400')} />
-                </span>
-                {connected ? 'Live' : 'Reconnecting…'}
-              </div>
-            </div>
-          </motion.div>
+      <Tabs value={page} onValueChange={goto} className="min-h-dvh gap-0">
+        <header className="sticky top-0 z-40 border-b bg-black pt-[env(safe-area-inset-top)]">
+          <div className="flex h-14 items-center gap-3 px-4 md:px-6">
+            <h1 className="text-lg font-semibold tracking-tight">Seedbox</h1>
+            <Badge variant={connected ? 'secondary' : 'outline'} className="font-normal">{connected ? 'Live' : 'Offline'}</Badge>
+            {nav('ml-4 hidden md:flex', false)}
+            <Button className="ml-auto h-10 px-5" onClick={() => setAdding(true)}>Add</Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 pb-3 font-mono text-[13px] tabular-nums md:px-6">
+            <span className="shrink-0"><span className="text-muted-foreground">Down </span>{speed(stats?.downloadSpeed ?? 0)}</span>
+            <span className="shrink-0"><span className="text-muted-foreground">Up </span>{speed(stats?.uploadSpeed ?? 0)}</span>
+            <span className="shrink-0"><span className="text-muted-foreground">Peers </span>{stats?.peers ?? 0}</span>
+            <span className="shrink-0"><span className="text-muted-foreground">Free </span>{bytes(stats?.disk.free ?? 0)}</span>
+          </div>
         </header>
 
-        <motion.section
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.05, type: 'spring', stiffness: 200, damping: 24 }}
-          className="mb-5 grid gap-4 rounded-3xl border border-white/10 bg-card/50 p-4 shadow-2xl shadow-black/30 backdrop-blur-xl grid-cols-2 sm:p-6 lg:grid-cols-[1fr_1fr_1.2fr]"
-        >
-          <SpeedDial value={stats?.downloadSpeed ?? 0} limit={stats?.downloadLimit ?? -1} label="Download" color="cyan" />
-          <SpeedDial value={stats?.uploadSpeed ?? 0} limit={stats?.uploadLimit ?? -1} label="Upload / Seed" color="violet" />
-          <div className="col-span-2 flex flex-col gap-3 lg:col-span-1">
-            <div className="grid grid-cols-2 gap-2">
-              <Stat icon={<Zap className="size-4 text-cyan-400" />} label="Active" value={stats?.active ?? 0} />
-              <Stat icon={<Sprout className="size-4 text-emerald-400" />} label="Seeding" value={stats?.seeding ?? 0} />
-              <Stat icon={<Users className="size-4 text-violet-400" />} label="Peers" value={stats?.peers ?? 0} />
-              <Stat icon={<Activity className="size-4 text-fuchsia-400" />} label="Ratio" value={(stats?.ratio ?? 0).toFixed(2)} />
-            </div>
-            <div className="rounded-xl bg-white/[0.03] px-3 py-2.5">
-              <div className="mb-1.5 flex items-center justify-between text-xs">
-                <span className="flex items-center gap-1.5 text-muted-foreground"><HardDrive className="size-3.5" /> Storage</span>
-                <span className="font-mono tabular-nums">{bytes(diskUsed)} / {bytes(stats?.disk.total ?? 0)}</span>
-              </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
-                <motion.div
-                  className={cn('h-full rounded-full', diskPct > 90 ? 'bg-rose-500' : 'bg-gradient-to-r from-emerald-400 to-cyan-400')}
-                  animate={{ width: `${diskPct}%` }}
-                  transition={{ type: 'spring', stiffness: 60, damping: 20 }}
-                />
-              </div>
-            </div>
-            <div className="rounded-xl bg-white/[0.03] px-2 pt-2">
-              <Sparkline data={history} />
-            </div>
-          </div>
-        </motion.section>
-
-        <div className="mb-5"><AddTorrent /></div>
-
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="mb-4 bg-white/5">
-            <TabsTrigger value="torrents"><ArrowDownToLine /> Torrents {torrents.length > 0 && <span className="ml-1 rounded-full bg-white/10 px-1.5 text-[10px]">{torrents.length}</span>}</TabsTrigger>
-            <TabsTrigger value="files"><HardDrive /> Server files</TabsTrigger>
-            <TabsTrigger value="settings"><Settings2 /> Settings</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="torrents">
-            <motion.div layout className="grid gap-3">
-              <AnimatePresence mode="popLayout">
-                {torrents.map(t => <TorrentCard key={t.infoHash} t={t} />)}
-              </AnimatePresence>
-              {data && torrents.length === 0 && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-dashed border-white/10 py-16 text-center">
-                  <motion.div animate={{ y: [0, -6, 0] }} transition={{ repeat: Infinity, duration: 2.4, ease: 'easeInOut' }}>
-                    <ArrowDownToLine className="mx-auto size-10 text-cyan-400/70" />
-                  </motion.div>
-                  <p className="mt-3 font-medium">No torrents yet</p>
-                  <p className="text-sm text-muted-foreground">Paste a magnet link, or drop a .torrent file anywhere.</p>
-                </motion.div>
-              )}
-            </motion.div>
+        <main className="w-full px-4 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-6 md:pb-10">
+          <TabsContent value="downloads" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
+            <DownloadsPage torrents={torrents} loading={!data} onOpen={setOpenHash} onAdd={() => setAdding(true)} />
           </TabsContent>
-
-          <TabsContent value="files">
-            {tab === 'files' && <DiskBrowser />}
+          <TabsContent value="files" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
+            <FilesPage stats={stats} />
           </TabsContent>
-
-          <TabsContent value="settings">
-            <SettingsPanel
+          <TabsContent value="stats" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
+            <Suspense fallback={<div className="flex justify-center py-16"><Spinner className="size-6" /></div>}>
+              <StatsPage stats={stats} torrents={torrents} history={history} />
+            </Suspense>
+          </TabsContent>
+          <TabsContent value="logs" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
+            <LogsPage logs={logs} onClear={clearLogs} />
+          </TabsContent>
+          <TabsContent value="settings" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
+            <SettingsPage
               stats={stats}
+              connected={connected}
               authRequired={auth.required}
               onLogout={async () => { await api.logout(); setAuth({ required: true, ok: false }) }}
             />
           </TabsContent>
-        </Tabs>
-      </div>
+        </main>
 
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-black pb-[env(safe-area-inset-bottom)] md:hidden">
+          {nav('flex', true)}
+        </nav>
+      </Tabs>
+
+      <AddTorrent open={adding} onOpenChange={setAdding} />
+      <TorrentPanel t={openTorrent} onClose={() => setOpenHash(null)} />
       <Player media={media} onClose={() => setMedia(null)} />
-      <Toaster theme="dark" position="top-center" richColors />
+      <Toaster theme="dark" position="top-center" />
+
+      <div className={cn(
+        'pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/90 transition-opacity duration-200',
+        dragging ? 'opacity-100' : 'opacity-0',
+      )}>
+        <p className="rounded-xl border border-dashed px-10 py-8 text-lg font-medium">Drop .torrent files to add</p>
+      </div>
     </AppContext.Provider>
   )
 }

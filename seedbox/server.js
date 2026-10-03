@@ -10,9 +10,19 @@ const PORT = process.env.PORT || 3000
 const DOWNLOAD_DIR = path.resolve(process.env.DOWNLOAD_DIR || path.join(__dirname, 'downloads'))
 const PASSWORD = process.env.APP_PASSWORD || ''
 const STATE_FILE = path.join(DOWNLOAD_DIR, '.seedbox.json')
+const META_DIR = path.join(DOWNLOAD_DIR, '.torrents')
 const PUBLIC_DIR = path.join(__dirname, 'public')
 
-fs.mkdirSync(DOWNLOAD_DIR, { recursive: true })
+fs.mkdirSync(META_DIR, { recursive: true })
+
+// .torrent metadata is cached so restarts show files instantly and resume
+// from data already on disk, even before any peer is found.
+const metaFile = hash => path.join(META_DIR, `${hash}.torrent`)
+function cacheMeta (t) {
+  if (!t.infoHash || !t.torrentFile) return
+  const f = metaFile(t.infoHash)
+  if (!fs.existsSync(f)) fs.writeFile(f, t.torrentFile, () => {})
+}
 
 // ---------- Auth ----------
 // Session cookie for the UI, plus a link token (?t=) so copied links work
@@ -29,12 +39,21 @@ function cookie (req, name) {
 const authed = req => !PASSWORD || cookie(req, 'sb') === SESSION || req.query.t === LINK_TOKEN
 const requireAuth = (req, res, next) => authed(req) ? next() : res.status(401).json({ error: 'Login required' })
 
+// ---------- Activity log ----------
+const logs = []
+let logSeq = 0
+function log (level, msg) {
+  logs.push({ id: ++logSeq, ts: Date.now(), level, msg })
+  if (logs.length > 500) logs.shift()
+  console.log(`[${level}] ${msg}`)
+}
+
 // ---------- State ----------
 const state = { torrents: [], downloadLimit: -1, uploadLimit: -1 }
 try { Object.assign(state, JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))) } catch {}
 
 const client = new WebTorrent({ maxConns: 300 })
-client.on('error', err => console.error('client error:', err.message))
+client.on('error', err => log('error', `Client: ${err.message}`))
 client.throttleDownload(state.downloadLimit)
 client.throttleUpload(state.uploadLimit)
 
@@ -43,7 +62,7 @@ const addedAt = new Map(state.torrents.map(t => [t.infoHash, t.addedAt]))
 function saveState () {
   state.torrents = client.torrents
     .filter(t => t.infoHash)
-    .map(t => ({ magnet: t.magnetURI, infoHash: t.infoHash, addedAt: addedAt.get(t.infoHash) || Date.now(), paused: t.paused }))
+    .map(t => ({ magnet: t.magnetURI, infoHash: t.infoHash, addedAt: addedAt.get(t.infoHash) || Date.now(), paused: t.paused, done: t.done }))
   fs.writeFile(STATE_FILE, JSON.stringify(state), () => {})
 }
 
@@ -51,18 +70,35 @@ function findTorrent (hash) {
   return client.torrents.find(t => t.infoHash === hash)
 }
 
-function addTorrent (id, { paused = false } = {}) {
+function addTorrent (id, { paused = false, wasDone = false } = {}) {
   return new Promise((resolve, reject) => {
     let torrent
     try {
-      torrent = client.add(id, { path: DOWNLOAD_DIR, paused }, t => { saveState(); resolve(t) })
+      torrent = client.add(id, { path: DOWNLOAD_DIR, paused }, t => { cacheMeta(t); saveState(); resolve(t) })
     } catch (err) {
       return reject(err)
     }
-    torrent.once('error', reject)
+    torrent.once('error', err => { log('error', `Torrent failed: ${err.message}`); reject(err) })
     torrent.once('infoHash', () => {
-      if (!addedAt.has(torrent.infoHash)) addedAt.set(torrent.infoHash, Date.now())
+      if (!addedAt.has(torrent.infoHash)) {
+        addedAt.set(torrent.infoHash, Date.now())
+        log('info', `Added ${torrent.name || torrent.infoHash}`)
+      }
       saveState()
+    })
+    torrent.once('metadata', () => {
+      cacheMeta(torrent)
+      log('info', `Ready: ${torrent.name} (${torrent.files.length} files)`)
+    })
+    torrent.once('done', () => {
+      if (!wasDone) log('success', `Download complete: ${torrent.name}`)
+      saveState()
+    })
+    // Skip routine DHT/tracker chatter; keep real warnings.
+    torrent.on('warning', err => {
+      const msg = String(err?.message || err)
+      if (/no nodes to query|tracker|socket|ECONNRESET|ETIMEDOUT/i.test(msg)) return
+      log('warn', `${torrent.name || torrent.infoHash}: ${msg}`)
     })
     // Don't wait for metadata; the UI shows it while peers are found.
     setTimeout(() => resolve(torrent), 1200)
@@ -70,10 +106,12 @@ function addTorrent (id, { paused = false } = {}) {
 }
 
 for (const t of state.torrents) {
-  addTorrent(t.magnet, { paused: t.paused }).catch(err => console.error('resume failed:', err.message))
+  const cached = t.infoHash && fs.existsSync(metaFile(t.infoHash)) ? fs.readFileSync(metaFile(t.infoHash)) : null
+  addTorrent(cached || t.magnet, { paused: t.paused, wasDone: !!t.done }).catch(err => log('error', `Resume failed: ${err.message}`))
 }
 
 // ---------- Serialization ----------
+const num = v => (Number.isFinite(v) ? v : 0)
 const fileUrl = (t, i) => `/files/${t.infoHash}/${i}/${encodeURIComponent(t.files[i].name)}`
 
 function serialize (t) {
@@ -82,20 +120,20 @@ function serialize (t) {
     name: t.name || 'Fetching metadata…',
     magnet: t.magnetURI,
     ready: t.ready,
-    progress: t.progress,
-    downloadSpeed: t.downloadSpeed,
-    uploadSpeed: t.uploadSpeed,
-    uploaded: t.uploaded,
-    ratio: t.ratio,
+    progress: num(t.progress),
+    downloadSpeed: num(t.downloadSpeed),
+    uploadSpeed: num(t.uploadSpeed),
+    uploaded: num(t.uploaded),
+    ratio: num(t.ratio),
     peers: t.numPeers,
     length: t.length || 0,
-    downloaded: t.downloaded,
-    timeRemaining: t.timeRemaining,
+    downloaded: num(t.downloaded),
+    timeRemaining: Number.isFinite(t.timeRemaining) ? t.timeRemaining : null,
     paused: t.paused,
     done: t.done,
     addedAt: addedAt.get(t.infoHash) || 0,
     files: (t.files || []).map((f, i) => ({
-      index: i, name: f.name, path: f.path, length: f.length, progress: f.progress, url: fileUrl(t, i)
+      index: i, name: f.name, path: f.path, length: f.length, progress: num(f.progress), url: fileUrl(t, i)
     }))
   }
 }
@@ -112,9 +150,9 @@ function diskStats () {
 function snapshot () {
   return {
     stats: {
-      downloadSpeed: client.downloadSpeed,
-      uploadSpeed: client.uploadSpeed,
-      ratio: client.ratio,
+      downloadSpeed: num(client.downloadSpeed),
+      uploadSpeed: num(client.uploadSpeed),
+      ratio: num(client.ratio),
       peers: client.torrents.reduce((n, t) => n + t.numPeers, 0),
       active: client.torrents.filter(t => !t.paused && !t.done).length,
       seeding: client.torrents.filter(t => !t.paused && t.done).length,
@@ -140,7 +178,10 @@ app.post('/api/login', express.json(), (req, res) => {
     crypto.createHash('sha256').update(String(req.body.password || '')).digest(),
     crypto.createHash('sha256').update(PASSWORD).digest()
   )
-  if (!ok) return res.status(401).json({ error: 'Wrong password' })
+  if (!ok) {
+    log('warn', `Failed login from ${req.ip}`)
+    return res.status(401).json({ error: 'Wrong password' })
+  }
   res.set('Set-Cookie', `sb=${SESSION}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 365}${req.secure ? '; Secure' : ''}`)
   res.json({ ok: true, linkToken: LINK_TOKEN })
 })
@@ -157,7 +198,12 @@ app.get('/api/state', (req, res) => res.json(snapshot()))
 app.get('/api/events', (req, res) => {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' })
   res.flushHeaders()
-  const send = () => res.write(`data: ${JSON.stringify(snapshot())}\n\n`)
+  let lastLog = 0
+  const send = () => {
+    const fresh = logs.filter(l => l.id > lastLog)
+    if (fresh.length) lastLog = fresh[fresh.length - 1].id
+    res.write(`data: ${JSON.stringify({ ...snapshot(), logs: fresh })}\n\n`)
+  }
   send()
   const timer = setInterval(send, 1000)
   req.on('close', () => clearInterval(timer))
@@ -181,12 +227,27 @@ app.post('/api/torrents/file', express.raw({ type: '*/*', limit: '10mb' }), asyn
   }
 })
 
+app.post('/api/all/:action', (req, res) => {
+  const action = req.params.action
+  if (action !== 'pause' && action !== 'resume') return res.sendStatus(400)
+  for (const t of client.torrents) action === 'pause' ? t.pause() : t.resume()
+  log('info', `${action === 'pause' ? 'Paused' : 'Resumed'} all torrents`)
+  saveState()
+  res.json({ ok: true })
+})
+
+app.delete('/api/logs', (req, res) => {
+  logs.length = 0
+  res.sendStatus(204)
+})
+
 app.post('/api/torrents/:hash/:action', (req, res) => {
   const t = findTorrent(req.params.hash)
   if (!t) return res.sendStatus(404)
   if (req.params.action === 'pause') t.pause()
   else if (req.params.action === 'resume') t.resume()
   else return res.sendStatus(400)
+  log('info', `${req.params.action === 'pause' ? 'Paused' : 'Resumed'} ${t.name}`)
   saveState()
   res.json(serialize(t))
 })
@@ -194,8 +255,11 @@ app.post('/api/torrents/:hash/:action', (req, res) => {
 app.delete('/api/torrents/:hash', async (req, res) => {
   const t = findTorrent(req.params.hash)
   if (!t) return res.sendStatus(404)
+  const name = t.name
   await t.destroy({ destroyStore: req.query.files === '1' })
   addedAt.delete(req.params.hash)
+  fs.rm(metaFile(req.params.hash), { force: true }, () => {})
+  log('info', `Removed ${name}${req.query.files === '1' ? ' and its files' : ''}`)
   saveState()
   res.sendStatus(204)
 })
@@ -222,6 +286,7 @@ app.post('/api/settings', express.json(), (req, res) => {
   const up = limit(req.body.uploadLimit)
   if (down !== undefined) { state.downloadLimit = down; client.throttleDownload(down) }
   if (up !== undefined) { state.uploadLimit = up; client.throttleUpload(up) }
+  log('info', `Speed limits: down ${state.downloadLimit > 0 ? state.downloadLimit + ' B/s' : 'unlimited'}, up ${state.uploadLimit > 0 ? state.uploadLimit + ' B/s' : 'unlimited'}`)
   saveState()
   res.json({ downloadLimit: state.downloadLimit, uploadLimit: state.uploadLimit })
 })
@@ -275,10 +340,12 @@ app.delete('/api/disk', async (req, res) => {
     for (const t of client.torrents) {
       if (t.name && path.join(DOWNLOAD_DIR, t.name) === p) {
         addedAt.delete(t.infoHash)
+        fs.rm(metaFile(t.infoHash), { force: true }, () => {})
         await t.destroy()
       }
     }
     fs.rmSync(p, { recursive: true, force: true })
+    log('info', `Deleted ${path.relative(DOWNLOAD_DIR, p)} from disk`)
     saveState()
     res.sendStatus(204)
   } catch (err) {
@@ -350,8 +417,8 @@ function mimeFor (name) {
 app.use(express.static(PUBLIC_DIR, { maxAge: '1h' }))
 app.get('/{*splat}', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')))
 
-app.listen(PORT, () => console.log(`Seedbox running on http://localhost:${PORT} (files in ${DOWNLOAD_DIR})`))
+app.listen(PORT, () => log('info', `Server started on port ${PORT}, storing files in ${DOWNLOAD_DIR}`))
 
 // Keep the server up if a single torrent misbehaves.
-process.on('uncaughtException', err => console.error('uncaught:', err))
-process.on('unhandledRejection', err => console.error('unhandled:', err))
+process.on('uncaughtException', err => log('error', `Uncaught: ${err.message}`))
+process.on('unhandledRejection', err => log('error', `Unhandled: ${err?.message || err}`))

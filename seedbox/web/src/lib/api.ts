@@ -39,7 +39,9 @@ export type Stats = {
   disk: { total: number; free: number }
 }
 
-export type Snapshot = { stats: Stats; torrents: Torrent[] }
+export type LogEntry = { id: number; ts: number; level: 'info' | 'success' | 'warn' | 'error'; msg: string }
+
+export type Snapshot = { stats: Stats; torrents: Torrent[]; logs?: LogEntry[] }
 
 export type DiskEntry = {
   name: string
@@ -76,6 +78,8 @@ export const api = {
       headers: { 'Content-Type': 'application/x-bittorrent' },
       body: file,
     }),
+  all: (action: 'pause' | 'resume') => req('/api/all/' + action, { method: 'POST' }),
+  clearLogs: () => req('/api/logs', { method: 'DELETE' }),
   action: (hash: string, action: 'pause' | 'resume') => req<Torrent>(`/api/torrents/${hash}/${action}`, { method: 'POST' }),
   remove: (hash: string, files: boolean) => req(`/api/torrents/${hash}?files=${files ? 1 : 0}`, { method: 'DELETE' }),
   settings: (s: { downloadLimit?: number; uploadLimit?: number }) => req('/api/settings', json(s)),
@@ -107,6 +111,7 @@ export function duration(ms: number | null) {
 export const isVideo = (name: string) => /\.(mp4|m4v|webm|mkv|mov|avi|ts)$/i.test(name)
 export const isAudio = (name: string) => /\.(mp3|m4a|flac|ogg|wav|aac|opus)$/i.test(name)
 export const isImage = (name: string) => /\.(jpe?g|png|gif|webp|avif)$/i.test(name)
+export const ext = (name: string) => (name.includes('.') ? name.split('.').pop()!.toUpperCase().slice(0, 4) : 'FILE')
 export const isMedia = (name: string) => isVideo(name) || isAudio(name)
 // Formats browsers play natively; others (mkv/avi) go to an external app.
 export const browserPlayable = (name: string) => /\.(mp4|m4v|webm|mov|mp3|m4a|ogg|wav|flac|aac|opus)$/i.test(name)

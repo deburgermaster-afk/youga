@@ -1,115 +1,93 @@
-import { useEffect, useRef, useState } from 'react'
-import { motion } from 'motion/react'
-import { ClipboardPaste, FileUp, Loader2, Magnet, Plus } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Spinner } from '@/components/ui/spinner'
+import { Textarea } from '@/components/ui/textarea'
+import { Panel } from '@/components/panel'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
 
-export function AddTorrent() {
-  const [value, setValue] = useState('')
+const parse = (text: string) =>
+  text.split(/\s+/).map(s => s.trim()).filter(s => /^magnet:\?/i.test(s) || /^[a-f0-9]{40}$/i.test(s) || /^https?:\/\/.+\.torrent/i.test(s))
+
+export async function addMany(items: (string | File)[]) {
+  const results = await Promise.allSettled(items.map(i => (typeof i === 'string' ? api.addMagnet(i) : api.addFile(i))))
+  const ok = results.filter(r => r.status === 'fulfilled').length
+  const failed = results.length - ok
+  if (ok) toast.success(ok === 1 ? 'Torrent added' : `${ok} torrents added`)
+  if (failed) {
+    const reason = (results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined)?.reason
+    toast.error(`${failed} failed`, { description: reason?.message })
+  }
+  return ok
+}
+
+export function AddTorrent({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const [drag, setDrag] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const links = parse(text)
 
-  const add = async (fn: () => Promise<{ name: string }>) => {
+  const run = async (items: (string | File)[]) => {
+    if (!items.length) return
     setBusy(true)
-    try {
-      const t = await fn()
-      toast.success('Added', { description: t.name })
-      setValue('')
-    } catch (e) {
-      toast.error('Could not add torrent', { description: (e as Error).message })
-    } finally {
-      setBusy(false)
-    }
+    const ok = await addMany(items)
+    setBusy(false)
+    if (ok) { setText(''); onOpenChange(false) }
   }
-
-  const submit = (e?: React.FormEvent) => {
-    e?.preventDefault()
-    const v = value.trim()
-    if (v) add(() => api.addMagnet(v))
-  }
-
-  const addFiles = (files: FileList | null) => {
-    for (const f of Array.from(files || [])) add(() => api.addFile(f))
-  }
-
-  // Drop .torrent files anywhere on the page.
-  useEffect(() => {
-    const over = (e: DragEvent) => { e.preventDefault(); setDrag(true) }
-    const leave = (e: DragEvent) => { if (!e.relatedTarget) setDrag(false) }
-    const drop = (e: DragEvent) => {
-      e.preventDefault()
-      setDrag(false)
-      const text = e.dataTransfer?.getData('text')
-      if (e.dataTransfer?.files.length) addFiles(e.dataTransfer.files)
-      else if (text?.startsWith('magnet:')) add(() => api.addMagnet(text))
-    }
-    window.addEventListener('dragover', over)
-    window.addEventListener('dragleave', leave)
-    window.addEventListener('drop', drop)
-    return () => {
-      window.removeEventListener('dragover', over)
-      window.removeEventListener('dragleave', leave)
-      window.removeEventListener('drop', drop)
-    }
-  })
 
   const paste = async () => {
     try {
-      const text = (await navigator.clipboard.readText()).trim()
-      if (!text) return toast('Clipboard is empty')
-      setValue(text)
-      if (/^magnet:|^[a-f0-9]{40}$/i.test(text)) add(() => api.addMagnet(text))
+      const clip = await navigator.clipboard.readText()
+      setText(t => (t ? t + '\n' : '') + clip.trim())
     } catch {
-      toast('Allow clipboard access, or paste manually')
+      toast('Clipboard blocked. Long-press the box and paste.')
     }
   }
 
   return (
-    <>
-      <motion.form
-        onSubmit={submit}
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="relative flex flex-col gap-2 rounded-2xl border border-white/10 bg-card/60 p-2 shadow-2xl shadow-cyan-500/5 backdrop-blur-xl sm:flex-row"
-      >
-        <div className="relative flex-1">
-          <Magnet className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-cyan-400" />
-          <Input
-            value={value}
-            onChange={e => setValue(e.target.value)}
-            placeholder="Paste magnet link or info hash…"
-            className="h-11 border-0 bg-transparent pl-9 text-base shadow-none focus-visible:ring-0 dark:bg-transparent"
+    <Panel
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add torrents"
+      description="Paste magnet links or info hashes, or choose .torrent files."
+      footer={
+        <Button size="lg" className="h-12 w-full text-base" disabled={busy || !links.length} onClick={() => run(links)}>
+          {busy && <Spinner />}
+          {links.length > 1 ? `Add ${links.length} torrents` : 'Add torrent'}
+        </Button>
+      }
+    >
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor="magnets">Magnet links</FieldLabel>
+          <Textarea
+            id="magnets"
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder={'magnet:?xt=urn:btih:...\nOne per line'}
+            className="min-h-36 font-mono text-sm"
             autoComplete="off"
+            autoCorrect="off"
             spellCheck={false}
           />
+          <FieldDescription>
+            {links.length ? `${links.length} link${links.length > 1 ? 's' : ''} detected` : 'Add as many as you like at once.'}
+          </FieldDescription>
+        </Field>
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="outline" className="h-11" onClick={paste}>Paste</Button>
+          <Button variant="outline" className="h-11" onClick={() => fileRef.current?.click()}>Choose .torrent</Button>
         </div>
-        <div className="flex gap-2">
-          <Button type="button" variant="ghost" className="h-11 flex-1 sm:flex-none" onClick={paste}>
-            <ClipboardPaste /> Paste
-          </Button>
-          <Button type="button" variant="outline" className="h-11 flex-1 sm:flex-none" onClick={() => fileRef.current?.click()}>
-            <FileUp /> .torrent
-          </Button>
-          <Button type="submit" disabled={busy || !value.trim()} className="h-11 flex-1 bg-gradient-to-r from-cyan-400 to-violet-500 px-5 text-slate-950 hover:opacity-90 sm:flex-none">
-            {busy ? <Loader2 className="animate-spin" /> : <Plus />} Add
-          </Button>
-        </div>
-        <input ref={fileRef} type="file" accept=".torrent,application/x-bittorrent" multiple hidden onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
-      </motion.form>
-
-      <div className={cn(
-        'pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm transition-opacity duration-300',
-        drag ? 'opacity-100' : 'opacity-0'
-      )}>
-        <div className="rounded-3xl border-2 border-dashed border-cyan-400/60 px-12 py-10 text-center">
-          <FileUp className="mx-auto size-10 text-cyan-400" />
-          <p className="mt-3 text-lg font-medium">Drop .torrent files or magnet links</p>
-        </div>
-      </div>
-    </>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".torrent,application/x-bittorrent"
+          multiple
+          hidden
+          onChange={e => { run(Array.from(e.target.files || [])); e.target.value = '' }}
+        />
+      </FieldGroup>
+    </Panel>
   )
 }
