@@ -10,10 +10,12 @@ interface Env {
   ASSETS: Fetcher
   APP_PASSWORD?: string
   TORBOX_URL?: string // override for local testing
+  TMDB_URL?: string // override for local testing
 }
 
 type Job = {
   id: string
+  movieId?: number // library movie this download belongs to
   kind?: 'link' | 'magnet'
   // TorBox does the torrenting; we copy its finished files into R2.
   torbox?: { torrentId: number; fileId?: number }
@@ -46,13 +48,14 @@ const CONFIG = '.cloudbox/config.json'
 const TORBOX = 'https://api.torbox.app/v1/api'
 const isActive = (s: string) => s === 'queued' || s === 'copying' || s === 'remote'
 
-type Config = { torboxKey?: string; copyToCloud?: boolean }
+type Config = { torboxKey?: string; copyToCloud?: boolean; tmdbToken?: string }
 async function getConfig(env: Env): Promise<Config> {
   const o = await env.BUCKET.get(CONFIG)
   return o ? o.json() : {}
 }
 
 let torboxBase = TORBOX
+let tmdbBase = 'https://api.themoviedb.org/3'
 async function torbox<T>(key: string, path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(torboxBase + path, { ...init, headers: { Authorization: `Bearer ${key}`, ...(init?.headers || {}) } })
   const body = (await r.json().catch(() => ({}))) as { success?: boolean; data?: T; detail?: string; error?: string }
@@ -149,7 +152,7 @@ async function uniqueKey(env: Env, name: string) {
   return key
 }
 
-async function createMagnetJob(env: Env, magnet: string): Promise<Job> {
+async function createMagnetJob(env: Env, magnet: string, movieId?: number): Promise<Job> {
   const { torboxKey } = await getConfig(env)
   if (!torboxKey) throw new Error('Magnet links need a free TorBox key. Add it in Settings.')
   if (!magnet.startsWith('magnet:')) magnet = `magnet:?xt=urn:btih:${magnet}`
@@ -160,6 +163,7 @@ async function createMagnetJob(env: Env, magnet: string): Promise<Job> {
   const job: Job = {
     id: crypto.randomUUID(),
     kind: 'magnet',
+    movieId,
     torbox: { torrentId: data.torrent_id },
     url: magnet,
     name: dn || data.hash || 'Torrent',
@@ -219,6 +223,110 @@ async function resolveUrl(env: Env, job: Job) {
   if (!/^https?:\/\//.test(link || '')) throw new Error('TorBox did not return a download link. Try again in a minute.')
   job.url = link
   job.urlExpires = Date.now() + 2 * 60 * 60 * 1000
+}
+
+// ---------- Movie library ----------
+const LIBRARY = '.cloudbox/library.json'
+type MovieFile = { source: 'torbox' | 'cloud'; torrentId?: number; fileId?: number; key?: string; name: string; size: number }
+type Movie = {
+  id: number
+  imdbId?: string
+  title: string
+  year?: string
+  poster?: string
+  backdrop?: string
+  rating?: number
+  runtime?: number
+  genres?: string[]
+  overview?: string
+  addedAt: number
+  addedBy?: string
+  files: MovieFile[]
+  pending?: string[] // job ids still downloading
+}
+
+async function readLibrary(env: Env): Promise<Movie[]> {
+  const o = await env.BUCKET.get(LIBRARY)
+  return o ? o.json() : []
+}
+
+// Read-modify-write with an etag check so parallel updates don't clobber.
+async function updateLibrary(env: Env, fn: (movies: Movie[]) => Movie[] | void) {
+  for (let i = 0; i < 6; i++) {
+    const o = await env.BUCKET.get(LIBRARY)
+    const list: Movie[] = o ? await o.json() : []
+    const next = fn(list) || list
+    const r = await env.BUCKET.put(LIBRARY, JSON.stringify(next), o ? { onlyIf: { etagMatches: o.etag } } : undefined)
+    if (r) return next
+  }
+  throw new Error('Library is busy, try again')
+}
+
+const sameFile = (a: MovieFile, b: MovieFile) =>
+  a.source === b.source && (a.source === 'cloud' ? a.key === b.key : a.torrentId === b.torrentId && a.fileId === b.fileId)
+
+async function attachFile(env: Env, movieId: number, file: MovieFile, jobId?: string) {
+  await updateLibrary(env, list => {
+    const m = list.find(x => x.id === movieId)
+    if (!m) return
+    if (!m.files.some(f => sameFile(f, file))) m.files.push(file)
+    if (jobId) m.pending = (m.pending || []).filter(id => id !== jobId)
+  })
+}
+
+const VIDEO = /\.(mkv|mp4|m4v|avi|mov|webm|ts|wmv)$/i
+// The movie file in a torrent: the biggest video, ignoring samples.
+function mainVideo<T extends { name: string; size: number }>(files: T[]) {
+  const vids = files.filter(f => VIDEO.test(f.name) && !/sample/i.test(f.name))
+  return (vids.length ? vids : files).slice().sort((a, b) => b.size - a.size)[0]
+}
+
+// ---------- TMDB (movie info) ----------
+async function tmdb<T>(env: Env, path: string, params: Record<string, string> = {}, token?: string): Promise<T> {
+  const key = token ?? (await getConfig(env)).tmdbToken
+  if (!key) throw new Error('Add your TMDB key in Settings to search movies.')
+  const u = new URL(tmdbBase + path)
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v)
+  // v4 "read access tokens" are long JWTs; v3 API keys are 32 hex chars.
+  const bearer = key.length > 40
+  if (!bearer) u.searchParams.set('api_key', key)
+  const r = await fetch(u.toString(), { headers: bearer ? { Authorization: `Bearer ${key}` } : {}, cf: { cacheTtl: 3600, cacheEverything: true } } as RequestInit)
+  const body = (await r.json().catch(() => ({}))) as T & { status_message?: string }
+  if (!r.ok) throw new Error(`TMDB: ${body.status_message || r.status}`)
+  return body
+}
+
+type TmdbLite = { id: number; title: string; release_date?: string; poster_path?: string; backdrop_path?: string; vote_average?: number; overview?: string }
+const lite = (m: TmdbLite) => ({
+  id: m.id, title: m.title, year: m.release_date?.slice(0, 4) || '', poster: m.poster_path || '', backdrop: m.backdrop_path || '',
+  rating: Math.round((m.vote_average || 0) * 10) / 10, overview: m.overview || '',
+})
+
+async function movieDetail(env: Env, id: number) {
+  type D = TmdbLite & {
+    imdb_id?: string; runtime?: number; tagline?: string; genres?: { name: string }[]; vote_count?: number
+    production_countries?: { iso_3166_1: string; name: string }[]
+    credits?: { cast?: { name: string; character: string; profile_path?: string }[]; crew?: { job: string; name: string }[] }
+    videos?: { results?: { key: string; name: string; site: string; type: string }[] }
+    similar?: { results?: TmdbLite[] }
+    release_dates?: { results?: { iso_3166_1: string; release_dates: { certification: string }[] }[] }
+  }
+  const d = await tmdb<D>(env, `/movie/${id}`, { append_to_response: 'credits,videos,similar,release_dates' })
+  const cert = (d.release_dates?.results || []).find(r => r.iso_3166_1 === 'US')?.release_dates.find(x => x.certification)?.certification || ''
+  return {
+    ...lite(d),
+    imdbId: d.imdb_id || '',
+    runtime: d.runtime || 0,
+    tagline: d.tagline || '',
+    votes: d.vote_count || 0,
+    genres: (d.genres || []).map(g => g.name),
+    country: d.production_countries?.[0]?.iso_3166_1 || '',
+    certification: cert,
+    director: d.credits?.crew?.find(c => c.job === 'Director')?.name || '',
+    cast: (d.credits?.cast || []).slice(0, 15).map(c => ({ name: c.name, character: c.character, profile: c.profile_path || '' })),
+    trailers: (d.videos?.results || []).filter(v => v.site === 'YouTube' && /Trailer|Teaser/.test(v.type)).slice(0, 4).map(v => ({ key: v.key, name: v.name })),
+    similar: (d.similar?.results || []).slice(0, 15).map(lite),
+  }
 }
 
 // Per-isolate cache of TorBox download links (they're valid for hours), so
@@ -284,8 +392,19 @@ async function serveTorbox(req: Request, env: Env, torrentId: number, fileId: nu
   return new Response(up.body, { status: up.status, headers })
 }
 
-async function createJob(env: Env, raw: string): Promise<Job> {
-  if (isMagnet(raw)) return createMagnetJob(env, raw)
+async function createJob(env: Env, raw: string, movieId?: number): Promise<Job> {
+  const job = await createJobInner(env, raw, movieId)
+  if (movieId) {
+    await updateLibrary(env, list => {
+      const m = list.find(x => x.id === movieId)
+      if (m) m.pending = [...(m.pending || []), job.id]
+    })
+  }
+  return job
+}
+
+async function createJobInner(env: Env, raw: string, movieId?: number): Promise<Job> {
+  if (isMagnet(raw)) return createMagnetJob(env, raw, movieId)
   let url: URL
   try { url = new URL(raw) } catch { throw new Error('That is not a valid link') }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Only http and https links work')
@@ -305,6 +424,7 @@ async function createJob(env: Env, raw: string): Promise<Job> {
   const name = fileName(url, probe)
   const job: Job = {
     id: crypto.randomUUID(),
+    movieId,
     url: url.toString(),
     name,
     key: await uniqueKey(env, name),
@@ -373,6 +493,10 @@ async function step(env: Env, id: string, maxParts: number): Promise<boolean> {
         }
         job.remoteProgress = 1
         job.status = 'done'
+        if (job.movieId) {
+          const f = mainVideo(t.files)
+          await attachFile(env, job.movieId, { source: 'torbox', torrentId: job.torbox!.torrentId, fileId: f.id, name: f.name.split('/').pop() || f.name, size: f.size }, job.id)
+        }
       }
       job.lockUntil = 0
       await saveJob(env, job, etag)
@@ -419,6 +543,9 @@ async function step(env: Env, id: string, maxParts: number): Promise<boolean> {
   } catch (err) {
     job.status = 'error'
     job.error = (err as Error).message
+  }
+  if (job.status === 'done' && job.movieId) {
+    await attachFile(env, job.movieId, { source: 'cloud', key: job.key, name: job.name, size: job.size }, job.id).catch(() => {})
   }
   job.lockUntil = 0
   await saveJob(env, job, etag || undefined)
@@ -476,6 +603,7 @@ async function serveFile(req: Request, env: Env, key: string) {
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     torboxBase = env.TORBOX_URL || TORBOX
+    tmdbBase = env.TMDB_URL || 'https://api.themoviedb.org/3'
     const url = new URL(req.url)
     const path = url.pathname
 
@@ -541,9 +669,9 @@ export default {
       }
 
       if (path === '/api/jobs' && req.method === 'POST') {
-        const { url: link } = (await req.json().catch(() => ({}))) as { url?: string }
+        const { url: link, movieId } = (await req.json().catch(() => ({}))) as { url?: string; movieId?: number }
         if (!link) return json({ error: 'Paste a link first' }, 400)
-        const job = await createJob(env, link.trim())
+        const job = await createJob(env, link.trim(), movieId ? Number(movieId) : undefined)
         // Start right away; keeps going for ~30 s after we reply.
         ctx.waitUntil(step(env, job.id, 1))
         return json(job)
@@ -602,13 +730,63 @@ export default {
         return new Response(null, { status: 204 })
       }
 
-      const publicConfig = (c: Config) => ({ torbox: c.torboxKey ? '••••' + c.torboxKey.slice(-4) : '', copyToCloud: !!c.copyToCloud })
+      // ---- Movie info (TMDB) ----
+      if (path === '/api/tmdb/search') {
+        const q = url.searchParams.get('q') || ''
+        if (!q.trim()) return json({ results: [] })
+        const r = await tmdb<{ results: TmdbLite[] }>(env, '/search/movie', { query: q, include_adult: 'false' })
+        return json({ results: r.results.map(lite) })
+      }
+      if (path === '/api/tmdb/trending') {
+        const r = await tmdb<{ results: TmdbLite[] }>(env, '/trending/movie/week')
+        return json({ results: r.results.map(lite) })
+      }
+      const tm = /^\/api\/tmdb\/movie\/(\d+)$/.exec(path)
+      if (tm) return json(await movieDetail(env, Number(tm[1])))
+
+      // ---- Library ----
+      if (path === '/api/library' && req.method === 'GET') return json({ movies: (await readLibrary(env)).sort((a, b) => b.addedAt - a.addedAt) })
+      if (path === '/api/library' && req.method === 'POST') {
+        const b = (await req.json().catch(() => ({}))) as { id?: number; addedBy?: string }
+        if (!b.id) return json({ error: 'Missing movie id' }, 400)
+        const d = await movieDetail(env, Number(b.id))
+        const next = await updateLibrary(env, list => {
+          if (list.some(m => m.id === d.id)) return
+          list.push({
+            id: d.id, imdbId: d.imdbId, title: d.title, year: d.year, poster: d.poster, backdrop: d.backdrop, rating: d.rating,
+            runtime: d.runtime, genres: d.genres, overview: d.overview, addedAt: Date.now(), addedBy: b.addedBy, files: [],
+          })
+        })
+        return json(next.find(m => m.id === d.id))
+      }
+      const lib = /^\/api\/library\/(\d+)(\/attach|\/detach)?$/.exec(path)
+      if (lib) {
+        const id = Number(lib[1])
+        if (req.method === 'DELETE' && !lib[2]) {
+          await updateLibrary(env, list => list.filter(m => m.id !== id))
+          return new Response(null, { status: 204 })
+        }
+        if (req.method === 'POST' && lib[2] === '/attach') {
+          const f = (await req.json().catch(() => ({}))) as MovieFile
+          if (!f.source || !f.name) return json({ error: 'Missing file' }, 400)
+          await attachFile(env, id, { source: f.source, torrentId: f.torrentId, fileId: f.fileId, key: f.key, name: f.name, size: f.size || 0 })
+          return json({ ok: true })
+        }
+        if (req.method === 'POST' && lib[2] === '/detach') {
+          const f = (await req.json().catch(() => ({}))) as MovieFile
+          await updateLibrary(env, list => { const m = list.find(x => x.id === id); if (m) m.files = m.files.filter(x => !sameFile(x, f)) })
+          return json({ ok: true })
+        }
+      }
+
+      const mask = (k?: string) => (k ? '••••' + k.slice(-4) : '')
+      const publicConfig = (c: Config) => ({ torbox: mask(c.torboxKey), tmdb: mask(c.tmdbToken), copyToCloud: !!c.copyToCloud })
 
       if (path === '/api/config' && req.method === 'GET') return json(publicConfig(await getConfig(env)))
 
       // Only fields present in the body change.
       if (path === '/api/config' && req.method === 'POST') {
-        const body = (await req.json().catch(() => ({}))) as { torboxKey?: string; copyToCloud?: boolean }
+        const body = (await req.json().catch(() => ({}))) as { torboxKey?: string; copyToCloud?: boolean; tmdbToken?: string }
         const c = await getConfig(env)
         if (body.torboxKey !== undefined) {
           const key = String(body.torboxKey).trim()
@@ -616,6 +794,11 @@ export default {
           c.torboxKey = key || undefined
         }
         if (typeof body.copyToCloud === 'boolean') c.copyToCloud = body.copyToCloud
+        if (body.tmdbToken !== undefined) {
+          const t = String(body.tmdbToken).trim()
+          if (t) await tmdb(env, '/configuration', {}, t) // validates the key
+          c.tmdbToken = t || undefined
+        }
         await env.BUCKET.put(CONFIG, JSON.stringify(c))
         return json(publicConfig(c))
       }
@@ -641,6 +824,7 @@ export default {
   // Every minute: keep copying with the app closed.
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
     torboxBase = env.TORBOX_URL || TORBOX
+    tmdbBase = env.TMDB_URL || 'https://api.themoviedb.org/3'
     ctx.waitUntil(pumpAll(env, Date.now() + 13 * 60_000, 8))
   },
 } satisfies ExportedHandler<Env>

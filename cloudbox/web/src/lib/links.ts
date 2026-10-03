@@ -37,6 +37,10 @@ function androidIntent(url: string, title: string, pkg?: string) {
 }
 
 export const PLAYERS: PlayerApp[] = [
+  { id: 'kmplayer-android', label: 'KMPlayer', platforms: ['android'], build: (u, t) => androidIntent(u, t, 'com.kmplayer') },
+  // KMPlayer for iOS doesn't document a URL scheme; this is a best effort
+  // and openInApp() warns if nothing opens.
+  { id: 'kmplayer-ios', label: 'KMPlayer', platforms: ['ios'], build: u => `kmplayer://${u}` },
   { id: 'android-choose', label: 'Choose app…', platforms: ['android'], build: (u, t) => androidIntent(u, t) },
   { id: 'vlc-android', label: 'VLC', platforms: ['android'], build: (u, t) => androidIntent(u, t, 'org.videolan.vlc') },
   { id: 'mx', label: 'MX Player', platforms: ['android'], build: (u, t) => androidIntent(u, t, 'com.mxtech.videoplayer.ad') },
@@ -53,9 +57,14 @@ export const PLAYERS: PlayerApp[] = [
 
 export const playersFor = (p: Platform) => PLAYERS.filter(x => x.platforms.includes(p))
 
-export function openInApp(app: PlayerApp, url: string, title: string) {
+export function openInApp(app: PlayerApp, url: string, title: string, onFail?: () => void) {
+  // If the page is still visible a moment later, the app didn't open.
+  const t = setTimeout(() => { if (!document.hidden) onFail?.() }, 1800)
+  document.addEventListener('visibilitychange', () => clearTimeout(t), { once: true })
   window.location.href = app.build(absolute(url), title)
 }
+
+export const kmplayer = () => PLAYERS.find(p => p.id === (platform() === 'ios' ? 'kmplayer-ios' : 'kmplayer-android'))
 
 export async function copy(text: string) {
   try {

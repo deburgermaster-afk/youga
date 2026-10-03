@@ -8,7 +8,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { isAudio, isImage } from '@/lib/api'
 import { absolute, copy, openInApp, platform, playersFor } from '@/lib/links'
-import type { Media } from '@/lib/app-context'
+import { useApp, type Media } from '@/lib/app-context'
+import { positionFor, saveProgress } from '@/lib/profiles'
 
 // SRT -> WebVTT so the browser's <track> can show it.
 function srtToVtt(srt: string) {
@@ -18,9 +19,6 @@ function srtToVtt(srt: string) {
     .replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, '$1.$2')
 }
 
-const POS_KEY = 'cloudbox:pos:'
-const loadPos = (url: string) => { try { return Number(localStorage.getItem(POS_KEY + url)) || 0 } catch { return 0 } }
-const savePos = (url: string, t: number) => { try { localStorage.setItem(POS_KEY + url, String(Math.floor(t))) } catch { /* private mode */ } }
 
 const langName = (name: string) => {
   const code = /\.([a-z]{2,3})\.(srt|vtt)$/i.exec(name)?.[1]
@@ -28,6 +26,14 @@ const langName = (name: string) => {
 }
 
 export function Player({ media, onClose }: { media: Media | null; onClose: () => void }) {
+  const { profile } = useApp()
+  // "Continue watching" is saved per profile.
+  const loadPos = (url: string) => positionFor(profile, url)
+  const savePos = (url: string, t: number) => {
+    const v = video.current
+    if (!media) return
+    saveProgress(profile, { movieId: media.movieId, url, name: media.title || media.name, t, d: v?.duration || 0, at: Date.now() })
+  }
   const [failed, setFailed] = useState(false)
   const [tracks, setTracks] = useState<{ label: string; src: string; lang: string }[]>([])
   const [sub, setSub] = useState('off')
@@ -152,7 +158,7 @@ export function Player({ media, onClose }: { media: Media | null; onClose: () =>
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="mr-1 text-xs text-muted-foreground">Open in</span>
             {media && players.map(app => (
-              <Button key={app.id} size="sm" variant={failed ? 'default' : 'outline'} onClick={() => { close(); openInApp(app, media.url, media.name) }}>{app.label}</Button>
+              <Button key={app.id} size="sm" variant={failed ? 'default' : 'outline'} onClick={() => { close(); openInApp(app, media.url, media.name, () => toast(`${app.label} didn’t open. Is it installed? Try VLC or Infuse.`)) }}>{app.label}</Button>
             ))}
           </div>
         </div>

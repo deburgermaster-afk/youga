@@ -11,6 +11,42 @@ import { Switch } from '@/components/ui/switch'
 import { platform, playersFor } from '@/lib/links'
 import { useApp } from '@/lib/app-context'
 
+function TmdbCard() {
+  const [saved, setSaved] = useState<string | null>(null)
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { api.config().then(c => setSaved(c.tmdb)).catch(() => setSaved('')) }, [])
+  const save = async (value: string) => {
+    setBusy(true)
+    try {
+      const c = await api.saveConfig({ tmdbToken: value })
+      setSaved(c.tmdb)
+      setKey('')
+      toast.success(value ? 'Movie info connected' : 'TMDB disconnected')
+    } catch (e) {
+      toast.error((e as Error).message)
+    }
+    setBusy(false)
+  }
+  return (
+    <Card className="py-4">
+      <CardHeader className="px-4">
+        <CardTitle>Movie info (TMDB)</CardTitle>
+        <CardDescription className="leading-relaxed">
+          Posters, ratings, cast and trailers. Free key: themoviedb.org → Settings → API → copy the “API Read Access Token” (or the API key).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 px-4">
+        <p className="text-sm">{saved === null ? 'Checking…' : saved ? <>Connected <span className="font-mono text-muted-foreground">{saved}</span></> : 'Not connected'}</p>
+        <form className="flex gap-2" onSubmit={e => { e.preventDefault(); if (key.trim()) save(key.trim()) }}>
+          <Input value={key} onChange={e => setKey(e.target.value)} placeholder="Paste TMDB token or key" className="h-11 font-mono" autoComplete="off" spellCheck={false} />
+          <Button type="submit" className="h-11 px-4" disabled={busy || !key.trim()}>{busy ? <Spinner /> : 'Save'}</Button>
+        </form>
+      </CardContent>
+    </Card>
+  )
+}
+
 function TorBoxCard() {
   const [saved, setSaved] = useState<string | null>(null)
   const [copyToCloud, setCopyToCloud] = useState(false)
@@ -62,13 +98,24 @@ function TorBoxCard() {
   )
 }
 
-export function SettingsPage({ authRequired, onLogout }: { authRequired: boolean; onLogout: () => void }) {
+export function SettingsPage({ authRequired, onLogout, onSwitchProfile, onFiles, profileName }: { authRequired: boolean; onLogout: () => void; onSwitchProfile: () => void; onFiles: () => void; profileName: string }) {
   const { prefs, setPrefs } = useApp()
   const plat = platform()
   const players = playersFor(plat)
 
   return (
-    <div className="mx-auto grid w-full max-w-3xl gap-3">
+    <div className="mx-auto grid w-full max-w-3xl gap-3 px-5 pb-40">
+      <Card className="py-4">
+        <CardHeader className="px-4">
+          <CardTitle>Watching as {profileName}</CardTitle>
+          <CardDescription>Each person has their own “Continue watching”.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-2 px-4">
+          <Button variant="outline" className="h-11" onClick={onSwitchProfile}>Switch profile</Button>
+          <Button variant="outline" className="h-11" onClick={onFiles}>Manage files</Button>
+        </CardContent>
+      </Card>
+      <TmdbCard />
       <TorBoxCard />
       <Card className="py-4">
         <CardHeader className="px-4">
