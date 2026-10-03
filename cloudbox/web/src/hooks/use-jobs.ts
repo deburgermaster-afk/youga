@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type Job } from '@/lib/api'
 
-const active = (j: Job) => j.status === 'queued' || j.status === 'copying'
+const active = (j: Job) => j.status === 'queued' || j.status === 'copying' || j.status === 'remote'
 
 // Polls job progress. While anything is copying and the app is visible, it
 // also "pumps" the Worker so copies go faster than the 1-minute background

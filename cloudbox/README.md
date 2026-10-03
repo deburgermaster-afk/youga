@@ -9,7 +9,11 @@ A version of Seedbox that runs entirely on Cloudflare's free plan. Paste a **dir
 - **Streams straight from R2,** with seeking. Copied links work in VLC, MX Player and Infuse.
 - **Password login.** Black-and-white, mobile-first shadcn/ui, with a floating bottom bar.
 
-It doesn't support magnet links or `.torrent` files: Workers can't run BitTorrent. Use the main `seedbox` app on a server or PC for those.
+**Magnet links** work through [TorBox](https://torbox.app), because Workers can't run BitTorrent:
+1. TorBox downloads the torrent (step 1).
+2. Each file is then copied into R2 with its folders kept (step 2).
+
+Add your TorBox API key in **Settings**; it's stored privately in your bucket. TorBox's free plan gives 20 GB a month with files up to 1 GB. Paid plans start at $3/month.
 
 ## Deploy
 

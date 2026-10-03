@@ -61,7 +61,7 @@ export default function App() {
     )
   }
 
-  const copying = jobs?.filter(j => j.status === 'copying' || j.status === 'queued') ?? []
+  const copying = jobs?.filter(j => j.status === 'copying' || j.status === 'queued' || j.status === 'remote') ?? []
   const rate = copying.reduce((n, j) => n + (j.bps || 0), 0)
 
   return (

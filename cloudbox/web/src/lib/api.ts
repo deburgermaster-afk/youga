@@ -5,7 +5,11 @@ export type Job = {
   key: string
   size: number
   copied: number
-  status: 'queued' | 'copying' | 'done' | 'error' | 'paused'
+  status: 'queued' | 'copying' | 'remote' | 'done' | 'error' | 'paused'
+  kind?: 'link' | 'magnet'
+  remoteProgress?: number
+  remoteState?: string
+  children?: number
   error?: string
   bps?: number
   createdAt: number
@@ -47,6 +51,8 @@ export const api = {
   pump: () => req('/api/pump', post()),
   files: (prefix: string) => req<{ prefix: string; entries: Entry[] }>(`/api/files?prefix=${encodeURIComponent(prefix)}`),
   removeFile: (key: string) => req(`/api/files?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
+  config: () => req<{ torbox: string }>('/api/config'),
+  saveConfig: (torboxKey: string) => req<{ torbox: string }>('/api/config', post({ torboxKey })),
   usage: () => req<{ bytes: number; count: number }>('/api/usage'),
 }
 

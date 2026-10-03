@@ -14,7 +14,7 @@ import { api, bytes, duration, isImage, isMedia, isVideo, speed, type Entry, typ
 import { absolute, copy, openInApp, platform, preferredPlayer } from '@/lib/links'
 import { useApp } from '@/lib/app-context'
 
-const isLink = (s: string) => /^https?:\/\/\S+$/i.test(s)
+const isLink = (s: string) => /^https?:\/\/\S+$/i.test(s) || /^magnet:\?\S+$/i.test(s) || /^[a-f0-9]{40}$/i.test(s)
 
 function PasteBox({ onAdded }: { onAdded: () => void }) {
   const [value, setValue] = useState('')
@@ -23,12 +23,12 @@ function PasteBox({ onAdded }: { onAdded: () => void }) {
   // Starts copying immediately; no extra "Add" step.
   const start = async (text: string) => {
     const links = text.split(/\s+/).map(s => s.trim()).filter(isLink)
-    if (!links.length) return toast.error('Paste a direct download link (https://…)')
+    if (!links.length) return toast.error('Paste a magnet link or a direct download link')
     setBusy(true)
     for (const l of links) {
       try {
         const job = await api.add(l)
-        toast.success('Copying to your cloud', { description: job.name })
+        toast.success(job.kind === 'magnet' ? 'Torrent added' : 'Copying to your cloud', { description: job.name })
       } catch (e) {
         toast.error('Couldn’t add that link', { description: (e as Error).message })
       }
@@ -52,7 +52,7 @@ function PasteBox({ onAdded }: { onAdded: () => void }) {
             const text = e.clipboardData.getData('text')
             if (text.split(/\s+/).some(isLink)) { e.preventDefault(); start(text) }
           }}
-          placeholder="Paste download link"
+          placeholder="Paste magnet or download link"
           className="h-14 text-base"
           inputMode="url"
           autoComplete="off"
@@ -65,18 +65,20 @@ function PasteBox({ onAdded }: { onAdded: () => void }) {
           {busy ? <Spinner /> : 'Paste'}
         </Button>
       </form>
-      <p className="text-xs text-muted-foreground">Copies straight into your Cloudflare storage. Keeps going even if you close the app.</p>
+      <p className="text-xs text-muted-foreground">Starts right away and keeps going after you close the app. Magnet links use TorBox (set it up in Settings).</p>
     </div>
   )
 }
 
 function JobRow({ job, onChange }: { job: Job; onChange: () => void }) {
-  const pct = job.size > 0 ? (job.copied / job.size) * 100 : 0
+  const remote = job.status === 'remote' || (job.kind === 'magnet' && job.status !== 'done')
+  const pct = remote ? (job.remoteProgress ?? 0) * 100 : job.size > 0 ? (job.copied / job.size) * 100 : 0
   const left = job.bps && job.size > 0 ? ((job.size - job.copied) / job.bps) * 1000 : null
   const act = async (fn: () => Promise<unknown>, msg?: string) => {
     try { await fn(); if (msg) toast(msg); onChange() } catch (e) { toast.error((e as Error).message) }
   }
-  const right = job.status === 'paused' ? 'Paused'
+  const right = remote && job.status === 'remote' ? `Torrent · ${job.remoteState || 'starting'}`
+    : job.status === 'paused' ? 'Paused'
     : job.status === 'queued' ? 'Starting…'
       : job.status === 'error' ? 'Failed'
         : `${job.bps ? speed(job.bps) : '…'} · ${duration(left)}`
@@ -91,9 +93,9 @@ function JobRow({ job, onChange }: { job: Job; onChange: () => void }) {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
             {job.status === 'paused' && <DropdownMenuItem onSelect={() => act(() => api.jobAction(job.id, 'resume'))}>Resume</DropdownMenuItem>}
-            {(job.status === 'copying' || job.status === 'queued') && <DropdownMenuItem onSelect={() => act(() => api.jobAction(job.id, 'pause'))}>Pause</DropdownMenuItem>}
+            {(job.status === 'copying' || job.status === 'queued' || job.status === 'remote') && <DropdownMenuItem onSelect={() => act(() => api.jobAction(job.id, 'pause'))}>Pause</DropdownMenuItem>}
             {job.status === 'error' && <DropdownMenuItem onSelect={() => act(() => api.jobAction(job.id, 'retry'))}>Retry</DropdownMenuItem>}
-            <DropdownMenuItem onSelect={async () => { await copy(job.url); toast.success('Source link copied') }}>Copy source link</DropdownMenuItem>
+            {job.url && <DropdownMenuItem onSelect={async () => { await copy(job.url); toast.success('Link copied') }}>{job.kind === 'magnet' ? 'Copy magnet link' : 'Copy source link'}</DropdownMenuItem>}
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={() => act(() => api.removeJob(job.id), 'Cancelled')}>Cancel</DropdownMenuItem>
           </DropdownMenuContent>
@@ -101,7 +103,7 @@ function JobRow({ job, onChange }: { job: Job; onChange: () => void }) {
       </div>
       <WideProgress size="md" value={pct} left={`${pct.toFixed(1)}%`} right={right} muted={job.status === 'paused'} />
       <div className="flex items-center justify-between font-mono text-xs tabular-nums text-muted-foreground">
-        <span>{bytes(job.copied)} / {job.size > 0 ? bytes(job.size) : '?'}</span>
+        <span>{remote ? `Step 1 of 2: TorBox is downloading · ${job.size > 0 ? bytes(job.size) : 'getting info'}` : `${bytes(job.copied)} / ${job.size > 0 ? bytes(job.size) : '?'}`}</span>
         {job.error && <span className="truncate pl-3 text-destructive">{job.error}</span>}
       </div>
     </Card>

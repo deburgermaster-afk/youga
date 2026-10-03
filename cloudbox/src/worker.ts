@@ -9,10 +9,18 @@ interface Env {
   BUCKET: R2Bucket
   ASSETS: Fetcher
   APP_PASSWORD?: string
+  TORBOX_URL?: string // override for local testing
 }
 
 type Job = {
   id: string
+  kind?: 'link' | 'magnet'
+  // TorBox does the torrenting; we copy its finished files into R2.
+  torbox?: { torrentId: number; fileId?: number }
+  remoteProgress?: number
+  remoteState?: string
+  urlExpires?: number
+  children?: number
   url: string
   name: string
   key: string
@@ -23,7 +31,7 @@ type Job = {
   parts: R2UploadedPart[]
   uploadId?: string
   copied: number
-  status: 'queued' | 'copying' | 'done' | 'error' | 'paused'
+  status: 'queued' | 'copying' | 'remote' | 'done' | 'error' | 'paused'
   error?: string
   lockUntil: number
   createdAt: number
@@ -32,6 +40,25 @@ type Job = {
 }
 
 const JOBS = '.cloudbox/jobs/'
+const CONFIG = '.cloudbox/config.json'
+const TORBOX = 'https://api.torbox.app/v1/api'
+const isActive = (s: string) => s === 'queued' || s === 'copying' || s === 'remote'
+
+type Config = { torboxKey?: string }
+async function getConfig(env: Env): Promise<Config> {
+  const o = await env.BUCKET.get(CONFIG)
+  return o ? o.json() : {}
+}
+
+let torboxBase = TORBOX
+async function torbox<T>(key: string, path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(torboxBase + path, { ...init, headers: { Authorization: `Bearer ${key}`, ...(init?.headers || {}) } })
+  const body = (await r.json().catch(() => ({}))) as { success?: boolean; data?: T; detail?: string; error?: string }
+  if (!r.ok || body.success === false) throw new Error(`TorBox: ${body.detail || body.error || r.status}`)
+  return body.data as T
+}
+
+const isMagnet = (s: string) => /^magnet:\?/i.test(s) || /^[a-f0-9]{40}$/i.test(s)
 const PART = 100 * 1024 * 1024
 const LOCK_MS = 3 * 60_000
 
@@ -92,7 +119,7 @@ async function listJobs(env: Env, { activeOnly = false, recentDone = 10 } = {}) 
     cursor = l.truncated ? l.cursor : undefined
   } while (cursor)
   metas.sort((a, b) => b.createdAt - a.createdAt)
-  const active = metas.filter(m => m.status === 'queued' || m.status === 'copying' || m.status === 'paused')
+  const active = metas.filter(m => isActive(m.status) || m.status === 'paused')
   const rest = activeOnly ? [] : metas.filter(m => !active.includes(m)).slice(0, recentDone)
   const out: Job[] = []
   for (const m of [...active, ...rest].slice(0, 30)) {
@@ -120,7 +147,77 @@ async function uniqueKey(env: Env, name: string) {
   return key
 }
 
+async function createMagnetJob(env: Env, magnet: string): Promise<Job> {
+  const { torboxKey } = await getConfig(env)
+  if (!torboxKey) throw new Error('Magnet links need a free TorBox key. Add it in Settings.')
+  if (!magnet.startsWith('magnet:')) magnet = `magnet:?xt=urn:btih:${magnet}`
+  const form = new FormData()
+  form.set('magnet', magnet)
+  const data = await torbox<{ torrent_id: number; hash: string }>(torboxKey, '/torrents/createtorrent', { method: 'POST', body: form })
+  const dn = new URLSearchParams(magnet.slice(magnet.indexOf('?') + 1)).get('dn')
+  const job: Job = {
+    id: crypto.randomUUID(),
+    kind: 'magnet',
+    torbox: { torrentId: data.torrent_id },
+    url: magnet,
+    name: dn || data.hash || 'Torrent',
+    key: '',
+    size: -1,
+    ranges: true,
+    partSize: PART,
+    nextPart: 1,
+    parts: [],
+    copied: 0,
+    remoteProgress: 0,
+    status: 'remote',
+    lockUntil: 0,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }
+  await saveJob(env, job)
+  return job
+}
+
+const cleanKey = (p: string) => p.split('/').map(seg => seg.replace(/[\\\x00-\x1f]/g, '_').trim()).filter(Boolean).join('/')
+
+// Torrent finished on TorBox: queue one R2 copy job per file.
+async function spawnCopies(env: Env, parent: Job, files: { id: number; name: string; size: number }[]) {
+  for (const f of files) {
+    const name = f.name.split('/').pop() || f.name
+    const job: Job = {
+      id: crypto.randomUUID(),
+      kind: 'link',
+      torbox: { torrentId: parent.torbox!.torrentId, fileId: f.id },
+      url: '',
+      name,
+      key: await uniqueKey(env, cleanKey(f.name)),
+      size: f.size,
+      ranges: true,
+      partSize: Math.max(PART, Math.ceil(f.size / 9000)),
+      nextPart: 1,
+      parts: [],
+      copied: 0,
+      status: 'queued',
+      lockUntil: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }
+    await saveJob(env, job)
+  }
+}
+
+// TorBox download links expire; fetch a fresh one when needed.
+async function resolveUrl(env: Env, job: Job) {
+  if (!job.torbox?.fileId || (job.url && (job.urlExpires || 0) > Date.now())) return
+  const { torboxKey } = await getConfig(env)
+  if (!torboxKey) throw new Error('TorBox key missing. Add it in Settings.')
+  const q = new URLSearchParams({ token: torboxKey, torrent_id: String(job.torbox.torrentId), file_id: String(job.torbox.fileId) })
+  job.url = await torbox<string>(torboxKey, `/torrents/requestdl?${q}`)
+  job.urlExpires = Date.now() + 2 * 60 * 60 * 1000
+}
+
 async function createJob(env: Env, raw: string): Promise<Job> {
+  if (isMagnet(raw)) return createMagnetJob(env, raw)
   let url: URL
   try { url = new URL(raw) } catch { throw new Error('That is not a valid link') }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Only http and https links work')
@@ -177,17 +274,38 @@ async function step(env: Env, id: string, maxParts: number): Promise<boolean> {
   const loaded = await loadJob(env, id)
   if (!loaded) return false
   let { job, etag } = loaded
-  if (job.status !== 'queued' && job.status !== 'copying') return false
+  if (!isActive(job.status)) return false
   if (job.lockUntil > Date.now()) return false
 
   // Take the lock; lose gracefully if another invocation got there first.
   job.lockUntil = Date.now() + LOCK_MS
-  job.status = 'copying'
+  if (job.kind !== 'magnet') job.status = 'copying'
   const lockedEtag = await saveJob(env, job, etag)
   if (!lockedEtag) return false
   etag = lockedEtag
 
   try {
+    if (job.kind === 'magnet') {
+      const { torboxKey } = await getConfig(env)
+      if (!torboxKey) throw new Error('TorBox key missing. Add it in Settings.')
+      const t = await torbox<{ name: string; size: number; progress: number; download_state: string; download_finished: boolean; download_present: boolean; files?: { id: number; name: string; size: number }[] }>(
+        torboxKey, `/torrents/mylist?id=${job.torbox!.torrentId}&bypass_cache=true`)
+      job.name = t.name || job.name
+      job.size = t.size || job.size
+      job.remoteProgress = t.progress ?? 0
+      job.remoteState = t.download_state
+      if (/error|failed/i.test(t.download_state || '')) throw new Error(`TorBox: ${t.download_state}`)
+      if ((t.download_finished || t.download_present) && t.files?.length) {
+        await spawnCopies(env, job, t.files)
+        job.children = t.files.length
+        job.remoteProgress = 1
+        job.status = 'done'
+      }
+      job.lockUntil = 0
+      await saveJob(env, job, etag)
+      return true
+    }
+    await resolveUrl(env, job)
     if (!job.ranges) {
       const t0 = Date.now()
       const res = await fetch(job.url)
@@ -236,7 +354,7 @@ async function step(env: Env, id: string, maxParts: number): Promise<boolean> {
 async function pumpAll(env: Env, deadline: number, maxParts: number) {
   for (const job of await listJobs(env, { activeOnly: true })) {
     if (Date.now() > deadline) break
-    if (job.status === 'queued' || job.status === 'copying') await step(env, job.id, maxParts)
+    if (isActive(job.status)) await step(env, job.id, maxParts)
   }
 }
 
@@ -283,6 +401,7 @@ async function serveFile(req: Request, env: Env, key: string) {
 // ---------- Router ----------
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    torboxBase = env.TORBOX_URL || TORBOX
     const url = new URL(req.url)
     const path = url.pathname
 
@@ -340,9 +459,10 @@ export default {
           await env.BUCKET.delete(JOBS + job.id + '.json')
           return new Response(null, { status: 204 })
         }
-        if (m[2] === 'pause' && (job.status === 'queued' || job.status === 'copying')) job.status = 'paused'
+        if (m[2] === 'pause' && isActive(job.status)) job.status = 'paused'
         if (m[2] === 'resume' && job.status === 'paused') job.status = 'queued'
-        if (m[2] === 'retry' && job.status === 'error') { job.status = 'queued'; job.error = undefined }
+        if (m[2] === 'retry' && job.status === 'error') { job.status = job.kind === 'magnet' ? 'remote' : 'queued'; job.error = undefined; job.urlExpires = 0 }
+        if (m[2] === 'resume' && job.status === 'queued' && job.kind === 'magnet') job.status = 'remote'
         job.lockUntil = 0
         await saveJob(env, job, etag)
         return json(job)
@@ -376,6 +496,21 @@ export default {
         return new Response(null, { status: 204 })
       }
 
+      if (path === '/api/config' && req.method === 'GET') {
+        const c = await getConfig(env)
+        return json({ torbox: c.torboxKey ? '••••' + c.torboxKey.slice(-4) : '' })
+      }
+
+      if (path === '/api/config' && req.method === 'POST') {
+        const { torboxKey } = (await req.json().catch(() => ({}))) as { torboxKey?: string }
+        const key = String(torboxKey || '').trim()
+        if (key) await torbox(key, '/user/me') // validates the key
+        const c = await getConfig(env)
+        c.torboxKey = key || undefined
+        await env.BUCKET.put(CONFIG, JSON.stringify(c))
+        return json({ torbox: key ? '••••' + key.slice(-4) : '' })
+      }
+
       if (path === '/api/usage') {
         let bytes = 0
         let count = 0
@@ -396,6 +531,7 @@ export default {
 
   // Every minute: keep copying with the app closed.
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    torboxBase = env.TORBOX_URL || TORBOX
     ctx.waitUntil(pumpAll(env, Date.now() + 13 * 60_000, 8))
   },
 } satisfies ExportedHandler<Env>
