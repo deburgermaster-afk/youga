@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
-import { Badge } from '@/components/ui/badge'
+import { ArrowDown, ArrowUp, ChartNoAxesColumn, House, ListChecks, ScrollText, Settings2 } from 'lucide-react'
 import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -21,11 +21,11 @@ import { cn } from '@/lib/utils'
 const StatsPage = lazy(() => import('@/pages/stats').then(m => ({ default: m.StatsPage })))
 
 const PAGES = [
-  { id: 'home', label: 'Home' },
-  { id: 'downloads', label: 'All' },
-  { id: 'stats', label: 'Stats' },
-  { id: 'logs', label: 'Logs' },
-  { id: 'settings', label: 'Settings' },
+  { id: 'home', label: 'Home', icon: House },
+  { id: 'downloads', label: 'All', icon: ListChecks },
+  { id: 'stats', label: 'Stats', icon: ChartNoAxesColumn },
+  { id: 'logs', label: 'Logs', icon: ScrollText },
+  { id: 'settings', label: 'Settings', icon: Settings2 },
 ] as const
 
 const PAGE_KEY = 'seedbox:page'
@@ -101,22 +101,37 @@ export default function App() {
   const torrents = data?.torrents ?? []
   const openTorrent = torrents.find(t => t.infoHash === openHash) ?? null
 
-  const nav = (className: string, mobile: boolean) => (
-    <TabsList
-      variant="line"
-      className={cn(className, mobile
-        ? 'h-auto w-full rounded-none bg-black p-0'
-        : 'h-10 gap-1 bg-transparent p-0')}
-    >
+  const active = stats?.active ?? 0
+
+  // Desktop: text tabs in the header.
+  const topNav = (
+    <TabsList variant="line" className="ml-6 hidden h-10 gap-1 bg-transparent p-0 md:flex">
+      {PAGES.map(p => (
+        <TabsTrigger key={p.id} value={p.id} className="h-10 flex-none gap-2 px-3 text-sm">
+          <p.icon className="size-4" strokeWidth={1.75} />
+          {p.label}
+        </TabsTrigger>
+      ))}
+    </TabsList>
+  )
+
+  // Phone: floating glass bar with icon pills.
+  const bottomNav = (
+    <TabsList className="grid h-16 w-full grid-cols-5 group-data-horizontal/tabs:h-16 gap-1 rounded-2xl border border-white/10 bg-neutral-950/85 p-1.5 shadow-[0_8px_32px_rgba(0,0,0,0.6)] backdrop-blur-xl">
       {PAGES.map(p => (
         <TabsTrigger
           key={p.id}
           value={p.id}
-          className={cn(mobile
-            ? 'h-14 flex-1 rounded-none border-0 px-0 text-[13px] after:hidden data-[state=active]:font-semibold data-[state=active]:shadow-[inset_0_2px_0_0_var(--foreground)]'
-            : 'h-10 flex-none px-3 text-sm')}
+          aria-label={p.label}
+          className="group relative h-full flex-col gap-1 rounded-xl py-0 border-0 px-0 text-[10px] font-medium tracking-wide text-neutral-500 transition-all duration-300 data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:shadow-none dark:data-[state=active]:bg-white dark:data-[state=active]:text-black"
         >
-          {p.label}
+          <p.icon className="size-5 transition-transform duration-300 group-data-[state=active]:-translate-y-px group-data-[state=active]:scale-105" strokeWidth={1.75} />
+          <span>{p.label}</span>
+          {p.id === 'downloads' && active > 0 && (
+            <span className="absolute top-1 right-[calc(50%-24px)] flex size-4 items-center justify-center rounded-full bg-white font-mono text-[9px] font-bold text-black ring-2 ring-neutral-950 group-data-[state=active]:bg-black group-data-[state=active]:text-white group-data-[state=active]:ring-white">
+              {active}
+            </span>
+          )}
         </TabsTrigger>
       ))}
     </TabsList>
@@ -125,20 +140,24 @@ export default function App() {
   return (
     <AppContext.Provider value={ctx}>
       <Tabs value={page} onValueChange={goto} className="min-h-dvh gap-0">
-        <header className="sticky top-0 z-40 border-b bg-black pt-[env(safe-area-inset-top)]">
-          <div className="flex h-14 items-center gap-3 px-4 md:px-6">
-            <h1 className="text-lg font-semibold tracking-tight">Seedbox</h1>
-            <Badge variant={connected ? 'secondary' : 'outline'} className="font-normal">{connected ? 'Live' : 'Offline'}</Badge>
-            {nav('ml-4 hidden md:flex', false)}
-          </div>
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 pb-3 font-mono text-[13px] tabular-nums md:px-6">
-            <span className="shrink-0"><span className="text-muted-foreground">Down </span>{speed(stats?.downloadSpeed ?? 0)}</span>
-            <span className="shrink-0"><span className="text-muted-foreground">Up </span>{speed(stats?.uploadSpeed ?? 0)}</span>
-            <span className="shrink-0"><span className="text-muted-foreground">Peers </span>{stats?.peers ?? 0}</span>
+        <header className="sticky top-0 z-40 border-b border-white/10 bg-black/90 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
+          <div className="flex h-16 items-center gap-3 px-4 md:px-6">
+            <div className="min-w-0">
+              <h1 className="text-xl leading-none font-bold tracking-tight">Seedbox</h1>
+              <p className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span className={cn('size-1.5 rounded-full', connected ? 'animate-pulse bg-white' : 'bg-neutral-600')} />
+                {connected ? 'Live' : 'Offline'} · {torrents.length} torrent{torrents.length === 1 ? '' : 's'}
+              </p>
+            </div>
+            {topNav}
+            <div className="ml-auto flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-xs tabular-nums">
+              <span className="flex items-center gap-1"><ArrowDown className="size-3.5" />{speed(stats?.downloadSpeed ?? 0)}</span>
+              <span className="flex items-center gap-1 text-muted-foreground"><ArrowUp className="size-3.5" />{speed(stats?.uploadSpeed ?? 0)}</span>
+            </div>
           </div>
         </header>
 
-        <main className="w-full px-4 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:px-6 md:pb-10">
+        <main className="w-full px-4 pt-4 pb-[calc(7rem+env(safe-area-inset-bottom))] md:px-6 md:pb-10">
           <TabsContent value="home" className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200">
             <HomePage torrents={torrents} loading={!data} onOpen={setOpenHash} onViewAll={() => goto('downloads')} />
           </TabsContent>
@@ -163,8 +182,8 @@ export default function App() {
           </TabsContent>
         </main>
 
-        <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-black pb-[env(safe-area-inset-bottom)] md:hidden">
-          {nav('flex', true)}
+        <nav className="fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-40 md:hidden">
+          {bottomNav}
         </nav>
       </Tabs>
 
