@@ -7,7 +7,8 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { isAudio, isImage } from '@/lib/api'
-import { absolute, copy, openInApp, platform, playersFor } from '@/lib/links'
+import { absolute, copy } from '@/lib/links'
+import { OpenIn } from '@/components/open-in'
 import { useApp, type Media } from '@/lib/app-context'
 import { markDone, positionFor, saveProgress } from '@/lib/profiles'
 import { playMovie } from '@/lib/movie'
@@ -46,7 +47,6 @@ export function Player({ media, onClose }: { media: Media | null; onClose: () =>
   const [sub, setSub] = useState('off')
   const [rate, setRate] = useState('1')
   const video = useRef<HTMLVideoElement>(null)
-  const players = playersFor(platform())
 
   // Load subtitle files and convert them for the browser.
   useEffect(() => {
@@ -181,12 +181,12 @@ export function Player({ media, onClose }: { media: Media | null; onClose: () =>
               </Button>
             </div>
           )}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-xs text-muted-foreground">Open in</span>
-            {media && players.map(app => (
-              <Button key={app.id} size="sm" variant={failed ? 'default' : 'outline'} onClick={() => { close(); openInApp(app, media.url, media.name, () => toast(`${app.label} didn’t open. Is it installed? Try VLC or Infuse.`)) }}>{app.label}</Button>
-            ))}
-          </div>
+          {media && !isImage(media.name) && (
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground">Open in another player</p>
+              <OpenIn url={media.url} title={media.title || media.name} compact highlight="kmplayer" onOpen={() => { if (video.current) { savePos(media.url, video.current.currentTime); video.current.pause() } }} />
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

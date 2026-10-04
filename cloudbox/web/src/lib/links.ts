@@ -51,18 +51,27 @@ export const PLAYERS: PlayerApp[] = [
   { id: 'infuse', label: 'Infuse', platforms: ['ios'], build: u => `infuse://x-callback-url/play?url=${encodeURIComponent(u)}` },
   { id: 'nplayer', label: 'nPlayer', platforms: ['ios'], build: u => `nplayer-${u}` },
   { id: 'outplayer', label: 'Outplayer', platforms: ['ios'], build: u => `outplayer://${u}` },
+  // Opens the stream in Safari's own full-screen player (AirPlay, PiP) from the home-screen app.
+  { id: 'safari', label: 'Safari player', platforms: ['ios'], build: u => (standalone() ? u.replace(/^https?:\/\//, m => `x-safari-${m}`) : u) },
   { id: 'vlc-desktop', label: 'VLC', platforms: ['desktop'], build: u => `vlc://${u}` },
   { id: 'potplayer', label: 'PotPlayer', platforms: ['desktop'], build: u => `potplayer://${u}` },
   { id: 'iina', label: 'IINA', platforms: ['desktop'], build: u => `iina://weblink?url=${encodeURIComponent(u)}` },
 ]
 
+export const standalone = () => matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true
+
 export const playersFor = (p: Platform) => PLAYERS.filter(x => x.platforms.includes(p))
 
 export function openInApp(app: PlayerApp, url: string, title: string, onFail?: () => void) {
   // If the page is still visible a moment later, the app didn't open.
-  const t = setTimeout(() => { if (!document.hidden) onFail?.() }, 1800)
-  document.addEventListener('visibilitychange', () => clearTimeout(t), { once: true })
+  watchFail(onFail)
   window.location.href = app.build(absolute(url), title)
+}
+
+// Call from a link's onClick: reports if the app didn't take over.
+export function watchFail(onFail?: () => void) {
+  const t = setTimeout(() => { if (!document.hidden) onFail?.() }, 2000)
+  document.addEventListener('visibilitychange', () => clearTimeout(t), { once: true })
 }
 
 export const kmplayer = () => PLAYERS.find(p => p.id === (platform() === 'ios' ? 'kmplayer-ios' : 'kmplayer-android'))

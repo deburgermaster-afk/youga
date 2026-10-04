@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { ArrowLeft, Bookmark, BookmarkCheck, Download, ExternalLink, Play, Plus, Share2, Star, Trash2, Volume2, VolumeX } from 'lucide-react'
+import { ArrowLeft, Bookmark, BookmarkCheck, Download, Play, Plus, Share2, Star, Trash2, Volume2, VolumeX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Poster } from '@/components/poster'
+import { OpenIn } from '@/components/open-in'
 import { Episodes } from '@/components/episodes'
 import { TrailerBackground } from '@/components/trailer'
 import { WideProgress } from '@/components/wide-progress'
 import { api, peek, bytes, img, movieFileUrl, type FreeCopy, type Job, type Movie, type MovieDetail, type MovieFile } from '@/lib/api'
-import { absolute, copy, kmplayer, openInApp, platform, playersFor } from '@/lib/links'
+import { absolute, copy } from '@/lib/links'
 import { useApp } from '@/lib/app-context'
 import { kind, playMovie, pr, prText } from '@/lib/movie'
 import { episodeFiles, epLabel, nextEpisode, type EpFile } from '@/lib/episodes'
@@ -101,13 +99,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
   }
   const playMain = () => (isTv && upNext ? playEp(upNext.ep) : file && playFile(file))
 
-  const openKm = (f: MovieFile) => {
-    const app = kmplayer()
-    if (!app) return
-    openInApp(app, movieFileUrl(f), t?.title || f.name, () => toast(platform() === 'ios'
-      ? 'KMPlayer for iPhone doesn’t accept links from other apps. Try VLC or Infuse.'
-      : 'KMPlayer didn’t open. Is it installed?'))
-  }
+
 
   if (err && !t) {
     return (
@@ -208,22 +200,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
                     <Download className="size-[18px]" /> Download
                   </a>}
             </div>
-            <div className="flex gap-2">
-              <button className="btn-black flex h-10 flex-1 items-center justify-center gap-2 rounded-full text-[13px] font-medium" onClick={() => openKm(file)}>
-                <ExternalLink className="size-4" /> Open in KMPlayer
-              </button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button className="btn-black h-10 rounded-full px-4 text-[13px] font-medium">Other apps</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-52">
-                  <DropdownMenuLabel>Open in</DropdownMenuLabel>
-                  {playersFor(platform()).filter(p => !p.id.startsWith('kmplayer')).map(p => (
-                    <DropdownMenuItem key={p.id} onSelect={() => openInApp(p, movieFileUrl(file), t?.title || file.name, () => toast(`${p.label} didn’t open`))}>{p.label}</DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+            <OpenIn url={movieFileUrl(file)} title={t?.title || file.name} highlight="kmplayer" />
           </div>
         ) : pending.length ? (
           <div className="glass space-y-2 rounded-2xl p-3">
