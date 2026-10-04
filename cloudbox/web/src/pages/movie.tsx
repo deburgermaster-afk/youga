@@ -79,6 +79,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
     setBusy(false)
   }
   const removeFromVault = async () => {
+    if (!confirm(`Remove ${t?.title || 'this'} from your vault? Its ratings and watch history go too. Files on TorBox stay.`)) return
     try { await api.removeMovie(id); toast('Removed from your vault'); onChanged() } catch (e) { toast.error((e as Error).message) }
   }
 
@@ -321,6 +322,12 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
             </TabsContent>
           )}
         </Tabs>
+
+        {entry && (
+          <button onClick={removeFromVault} className="btn-black flex h-11 w-full items-center justify-center gap-2 rounded-full text-[14px] font-medium text-red-400">
+            <Trash2 className="size-4" /> Remove from vault
+          </button>
+        )}
       </div>
     </div>
   )

@@ -31,13 +31,15 @@ export function Panel({
   }
 
   return (
-    <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="data-[vaul-drawer-direction=bottom]:max-h-[94dvh]">
+    // repositionInputs off: on iPhone, the drawer's own keyboard handling
+    // shoved the sheet off the top of the screen. iOS scrolls the input into view itself.
+    <Drawer open={open} onOpenChange={onOpenChange} repositionInputs={false}>
+      <DrawerContent className="data-[vaul-drawer-direction=bottom]:max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)]">
         <DrawerHeader className="border-b px-4 pb-3 text-left">
           <DrawerTitle className="break-all text-base leading-snug">{title}</DrawerTitle>
           {description && <DrawerDescription>{description}</DrawerDescription>}
         </DrawerHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]">{children}</div>
         {footer && <DrawerFooter className="border-t px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">{footer}</DrawerFooter>}
       </DrawerContent>
     </Drawer>
