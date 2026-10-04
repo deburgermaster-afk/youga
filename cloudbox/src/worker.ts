@@ -307,7 +307,7 @@ async function tmdb<T>(env: Env, path: string, params: Record<string, string> = 
 // both fit the same library and URLs (TMDB movie and TV ids overlap).
 type TmdbLite = {
   id: number; title?: string; name?: string; release_date?: string; first_air_date?: string
-  poster_path?: string; backdrop_path?: string; vote_average?: number; overview?: string; media_type?: string
+  poster_path?: string; backdrop_path?: string; vote_average?: number; vote_count?: number; overview?: string; media_type?: string; adult?: boolean
 }
 const lite = (m: TmdbLite, tv = m.media_type === 'tv') => ({
   id: tv ? -m.id : m.id, title: m.title || m.name || '', year: (m.release_date || m.first_air_date || '').slice(0, 4),
@@ -448,6 +448,70 @@ type Free = {
   page?: string
   file?: MovieFile
   checkedAt: number
+}
+
+// ---------- Free catalog (filled in the background) ----------
+// A cron walks the Archive's curated public-domain film collections, matches
+// each film to TMDB, checks it with the same rules as freeCopy, and keeps the
+// ones that pass: up to 30 new films a day, a few per run.
+const CATALOG = '.cloudbox/free-catalog.json'
+const PER_DAY = 30
+const PER_RUN = 4
+type CatalogItem = { id: number; title: string; year: string; poster: string; backdrop: string; rating: number; why?: string; source?: string; addedAt: number }
+type Catalog = { items: CatalogItem[]; seen: string[]; day: string; addedToday: number; page: number }
+
+async function readCatalog(env: Env): Promise<Catalog> {
+  const o = await env.BUCKET.get(CATALOG)
+  const c = o ? ((await o.json()) as Catalog) : null
+  return c || { items: [], seen: [], day: '', addedToday: 0, page: 1 }
+}
+
+async function discoverFree(env: Env) {
+  const c = await readCatalog(env)
+  const today = new Date().toISOString().slice(0, 10)
+  if (c.day !== today) { c.day = today; c.addedToday = 0 }
+  if (c.addedToday >= PER_DAY) return { added: 0, reason: 'daily limit' }
+
+  const u = new URL('https://archive.org/advancedsearch.php')
+  u.searchParams.set('q', `mediatype:movies AND collection:(${[...CURATED].filter(x => x !== 'classic_tv' && x !== 'classic_cartoons').join(' OR ')})`)
+  for (const f of ['identifier', 'title', 'year']) u.searchParams.append('fl[]', f)
+  u.searchParams.set('rows', '25')
+  u.searchParams.set('page', String(c.page))
+  u.searchParams.append('sort[]', 'downloads desc')
+  u.searchParams.set('output', 'json')
+  const r = await fetch(u.toString())
+  if (!r.ok) return { added: 0, reason: 'archive ' + r.status }
+  const docs = ((await r.json()) as { response?: { docs?: { identifier: string; title?: string; year?: string | number }[] } }).response?.docs || []
+  const fresh = docs.filter(d => !c.seen.includes(d.identifier))
+  if (!fresh.length) c.page = docs.length ? c.page + 1 : 1 // this page is done (or wrapped around)
+
+  let added = 0
+  let tried = 0
+  for (const d of fresh) {
+    if (tried >= PER_RUN || c.addedToday >= PER_DAY) break
+    tried++
+    c.seen.push(d.identifier)
+    const title = String(d.title || '').replace(/\(\d{4}\)|\[.*?\]/g, '').trim()
+    const year = Number(d.year) || Number(/\b(19|20)\d\d\b/.exec(String(d.title))?.[0]) || 0
+    if (!title) continue
+    try {
+      const s = await tmdb<{ results: TmdbLite[] }>(env, '/search/movie', { query: title, ...(year ? { year: String(year) } : {}) })
+      const m = s.results.find(x => !year || Math.abs(Number((x.release_date || '').slice(0, 4)) - year) <= 1)
+      if (!m || c.items.some(i => i.id === m.id)) continue
+      // Family app: skip obscure (few votes) and adult/exploitation titles.
+      if (m.adult || (m.vote_count || 0) < 25 || /\b(sex|sexy|nud(e|ist)|strip|burlesque|erotic)\w*/i.test(`${m.title} ${title}`)) continue
+      const f = await freeCopy(env, m.id)
+      if (!f.found) continue
+      const l = lite(m, false)
+      c.items.unshift({ id: l.id, title: l.title, year: l.year, poster: l.poster, backdrop: l.backdrop, rating: l.rating, why: f.why, source: f.source, addedAt: Date.now() })
+      c.addedToday++
+      added++
+    } catch { /* try the next one */ }
+  }
+  c.items = c.items.slice(0, 400)
+  c.seen = c.seen.slice(-3000)
+  await env.BUCKET.put(CATALOG, JSON.stringify(c))
+  return { added, addedToday: c.addedToday, page: c.page }
 }
 
 async function freeCopy(env: Env, id: number): Promise<Free> {
@@ -991,6 +1055,11 @@ export default {
       if (ts) return json(await seasonDetail(env, Number(ts[1]), Number(ts[2])), 200, cache(3600))
       const fr = /^\/api\/free\/(-?\d+)$/.exec(path)
       if (fr) return json(await freeCopy(env, Number(fr[1])), 200, cache(3600))
+      if (path === '/api/free-catalog') {
+        const c = await readCatalog(env)
+        return json({ items: c.items, addedToday: c.addedToday }, 200, cache(120))
+      }
+      if (path === '/api/free-catalog/discover' && req.method === 'POST') return json(await discoverFree(env))
       if (path === '/api/meta') {
         const ids = (url.searchParams.get('ids') || '').split(',').map(Number).filter(n => Number.isInteger(n) && n !== 0).slice(0, 12)
         return json(await metaFor(env, ids), 200, cache(86400))
@@ -1110,9 +1179,11 @@ export default {
   },
 
   // Every minute: keep copying with the app closed.
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     torboxBase = env.TORBOX_URL || TORBOX
     tmdbBase = env.TMDB_URL || 'https://api.themoviedb.org/3'
-    ctx.waitUntil(pumpAll(env, Date.now() + 13 * 60_000, 8))
+    // Every 5 min: find a few more free films; every minute: move downloads along.
+    if (event.cron === '*/5 * * * *') ctx.waitUntil(discoverFree(env).catch(e => console.log('discover', String(e))))
+    else ctx.waitUntil(pumpAll(env, Date.now() + 13 * 60_000, 8))
   },
 } satisfies ExportedHandler<Env>

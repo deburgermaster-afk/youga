@@ -77,6 +77,7 @@ export default function App() {
     // Warm up the other screens once the first one is up.
     Object.values(load).forEach(f => f().catch(() => {}))
     api.trending().catch(() => {})
+    api.freeCatalog().catch(() => {})
   }, [])
 
   const loadLibrary = useCallback(() => {

@@ -43,6 +43,7 @@ export type MovieDetail = MovieLite & {
   seasons: Season[]
   imdbRating?: number; imdbVotes?: number
 }
+export type FreeItem = { id: number; title: string; year: string; poster: string; backdrop: string; rating: number; why?: string; source?: string; addedAt: number }
 export type Meta = { imdbId: string; imdb: number; votes: number; cast: string[] }
 // 'archive' = a free, legal copy streamed from the Internet Archive.
 export type MovieFile = { source: 'torbox' | 'cloud' | 'archive'; torrentId?: number; fileId?: number; key?: string; url?: string; name: string; size: number }
@@ -59,12 +60,14 @@ const details = new Map<number, MovieDetail>()
 const lites = new Map<number, MovieLite>()
 const searches = new Map<string, MovieLite[]>()
 let trendingList: MovieLite[] | null = null
+let freeList: FreeItem[] | null = null
 const seed = (list: MovieLite[]) => { for (const m of list) if (!lites.has(m.id)) lites.set(m.id, m) }
 export const peek = {
   movie: (id: number) => details.get(id) ?? null,
   lite: (id: number) => details.get(id) ?? lites.get(id) ?? null,
   search: (q: string) => searches.get(q.trim().toLowerCase()) ?? null,
   trending: () => trendingList,
+  freeCatalog: () => freeList,
 }
 const frees = new Map<number, Promise<FreeCopy>>()
 export const prefetchTitle = (id: number) => { api.movie(id).catch(() => {}) }
@@ -108,6 +111,8 @@ export const api = {
   watched: (id: number, by: string) => req(`/api/library/${id}/watched`, post({ by })),
   search: (q: string) => req<{ results: MovieLite[] }>(`/api/tmdb/search?q=${encodeURIComponent(q)}`)
     .then(r => { searches.set(q.trim().toLowerCase(), r.results); seed(r.results); return r }),
+  freeCatalog: () => req<{ items: FreeItem[]; addedToday: number }>('/api/free-catalog')
+    .then(r => { freeList = r.items; seed(r.items.map(i => ({ ...i, overview: '' }))); return r }),
   trending: () => req<{ results: MovieLite[] }>('/api/tmdb/trending')
     .then(r => { trendingList = r.results; seed(r.results); return r }),
   // Title pages are fetched once and kept, so opening one again (or after a prefetch) is instant.

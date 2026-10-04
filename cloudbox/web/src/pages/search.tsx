@@ -3,7 +3,7 @@ import { Play, Plus, Search, Star, X } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { MetaLine, Poster } from '@/components/poster'
-import { api, peek, img, prefetchTitle, type Job, type Meta, type Movie, type MovieLite } from '@/lib/api'
+import { api, peek, img, prefetchTitle, type FreeItem, type Job, type Meta, type Movie, type MovieLite } from '@/lib/api'
 import { useApp } from '@/lib/app-context'
 import { kind, playMovie, pr, prText } from '@/lib/movie'
 
@@ -61,6 +61,7 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
   const [q, setQ] = useState(lastQuery)
   const [results, setResults] = useState<MovieLite[] | null>(() => peek.search(lastQuery))
   const [trending, setTrending] = useState<MovieLite[] | null>(peek.trending)
+  const [free, setFree] = useState<FreeItem[] | null>(peek.freeCatalog)
   const [err, setErr] = useState('')
   const [starting, setStarting] = useState<number | null>(null)
   const [meta, setMeta] = useState<Record<string, Meta>>({})
@@ -69,6 +70,7 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
   useEffect(() => {
     if (!lastQuery) input.current?.focus()
     api.trending().then(r => setTrending(r.results)).catch(e => setErr((e as Error).message))
+    api.freeCatalog().then(r => setFree(r.items)).catch(() => {})
   }, [])
 
   // Search as you type (debounced).
@@ -101,6 +103,13 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
     }
     return () => { live = false }
   }, [idsKey])
+
+  // One tap: add the free copy to the vault and start playing.
+  const playFree = async (m: FreeItem) => {
+    setAdding(m.id)
+    await addOrAsk({ id: m.id, title: m.title })
+    setAdding(null)
+  }
 
   const playNow = async (m: Movie) => {
     setStarting(m.id)
@@ -170,6 +179,7 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
           </section>
         </>
       ) : (
+        <>
         <section className="space-y-2.5">
           <h2 className="font-display text-[17px] font-bold tracking-tight">Trending this week</h2>
           <div className="grid grid-cols-3 gap-x-2.5 gap-y-3 sm:grid-cols-5 lg:grid-cols-7">
@@ -180,6 +190,32 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
             ))}
           </div>
         </section>
+          {!!free?.length && (
+            <section className="space-y-2.5">
+              <div className="flex items-baseline justify-between">
+                <h2 className="font-display text-[17px] font-bold tracking-tight">Free to watch</h2>
+                <span className="text-[11px] text-white/45">Public domain & open movies · one tap</span>
+              </div>
+              <div className="grid grid-cols-3 gap-x-2.5 gap-y-3 sm:grid-cols-5 lg:grid-cols-7">
+                {free.map((m, i) => (
+                  <Poster
+                    key={m.id}
+                    id={m.id}
+                    index={i}
+                    title={m.title}
+                    poster={m.poster}
+                    sub={[m.year, m.why === 'Public domain' ? 'Public domain' : 'Open movie'].filter(Boolean).join(' · ')}
+                    rating={m.rating}
+                    onClick={() => playFree(m)}
+                    badge={adding === m.id
+                      ? <span className="btn-black flex size-7 items-center justify-center rounded-full"><Spinner /></span>
+                      : <span className="flex items-center gap-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[10px] font-bold text-black"><Play className="size-2.5 fill-black" />Free</span>}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       )}
     </div>
   )
