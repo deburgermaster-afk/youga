@@ -152,14 +152,36 @@ async function uniqueKey(env: Env, name: string) {
   return key
 }
 
-async function createMagnetJob(env: Env, magnet: string, movieId?: number): Promise<Job> {
+// .torrent file links: fetch the small file and hand it to TorBox like a magnet.
+const looksLikeTorrentUrl = (u: URL) => /\.torrent$/i.test(u.pathname) || /\/torrents?\/download\//i.test(u.pathname)
+const isBencodedTorrent = (b: Uint8Array) => b[0] === 0x64 /* 'd' */ && new TextDecoder('latin1').decode(b.subarray(0, 4096)).includes('4:info')
+function torrentName(b: Uint8Array) {
+  const text = new TextDecoder().decode(b)
+  const m = /4:name(\d+):/.exec(text)
+  return m ? text.slice(m.index + m[0].length, m.index + m[0].length + Number(m[1])) : ''
+}
+async function fetchTorrentFile(url: string) {
+  const r = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'Mozilla/5.0' } })
+  if (!r.ok) throw new Error(`The torrent link answered with ${r.status}`)
+  const b = new Uint8Array(await r.arrayBuffer())
+  if (b.length > 8 * 1024 * 1024 || !isBencodedTorrent(b)) return null
+  return b
+}
+
+async function createMagnetJob(env: Env, magnet: string, movieId?: number, torrentFile?: Uint8Array): Promise<Job> {
   const { torboxKey } = await getConfig(env)
-  if (!torboxKey) throw new Error('Magnet links need a free TorBox key. Add it in Settings.')
-  if (!magnet.startsWith('magnet:')) magnet = `magnet:?xt=urn:btih:${magnet}`
+  if (!torboxKey) throw new Error('Magnet and torrent links need a free TorBox key. Add it in Settings.')
   const form = new FormData()
-  form.set('magnet', magnet)
+  let dn: string | null = null
+  if (torrentFile) {
+    dn = torrentName(torrentFile) || null
+    form.set('file', new Blob([torrentFile], { type: 'application/x-bittorrent' }), `${dn || 'download'}.torrent`)
+  } else {
+    if (!magnet.startsWith('magnet:')) magnet = `magnet:?xt=urn:btih:${magnet}`
+    form.set('magnet', magnet)
+    dn = new URLSearchParams(magnet.slice(magnet.indexOf('?') + 1)).get('dn')
+  }
   const data = await torbox<{ torrent_id: number; hash: string }>(torboxKey, '/torrents/createtorrent', { method: 'POST', body: form })
-  const dn = new URLSearchParams(magnet.slice(magnet.indexOf('?') + 1)).get('dn')
   const job: Job = {
     id: crypto.randomUUID(),
     kind: 'magnet',
@@ -457,8 +479,12 @@ type Free = {
 const CATALOG = '.cloudbox/free-catalog.json'
 const PER_DAY = 150
 const PER_RUN = 5
+// Real feature films only: no shorts, clips or documentaries.
+const MIN_RUNTIME = 75
+const SKIP_GENRES = /documentary|music|tv movie/i
+const LIKED_GENRES = /action|animation|thriller|adventure|science fiction|crime|horror|mystery|fantasy|war/i
 const NOT_FAMILY = /\b(sex|sexy|nud(e|ist)|strip|burlesque|erotic|orgy|orgies|lust|porn|playboy|bikini)\w*/i
-type CatalogItem = { id: number; title: string; year: string; poster: string; backdrop: string; rating: number; votes?: number; why?: string; source?: string; addedAt: number }
+type CatalogItem = { id: number; title: string; year: string; poster: string; backdrop: string; rating: number; votes?: number; runtime?: number; genres?: string[]; why?: string; source?: string; addedAt: number }
 type Catalog = {
   items: CatalogItem[]; seen: string[]; day: string; addedToday: number
   page: number // most-downloaded public-domain films
@@ -478,7 +504,8 @@ async function readCatalog(env: Env): Promise<Catalog> {
 const catalogOrder = (items: CatalogItem[]) => [...items].sort((a, b) => score(b) - score(a))
 function score(i: CatalogItem) {
   const y = Number(i.year) || 1900
-  return Math.log10((i.votes || 10) + 1) * (i.rating || 5) * (y >= 2000 ? 2 : y >= 1970 ? 1.5 : y >= 1950 ? 1.15 : 1)
+  const liked = (i.genres || []).some(g => LIKED_GENRES.test(g)) ? 1.6 : 1
+  return Math.log10((i.votes || 10) + 1) * (i.rating || 5) * liked * (y >= 2000 ? 2 : y >= 1970 ? 1.5 : y >= 1950 ? 1.15 : 1)
 }
 
 type Cand = { key: string; title: string; year: number; movie?: TmdbLite }
@@ -486,7 +513,7 @@ type Cand = { key: string; title: string; year: number; movie?: TmdbLite }
 // Where to look this run. Three sources take turns so the list gets popular
 // classics, the newest public-domain titles, and recent open movies.
 async function nextCandidates(env: Env, c: Catalog): Promise<Cand[]> {
-  const mode = (c.run = (c.run || 0) + 1) % 3
+  const mode = (c.run = (c.run || 0) + 1) % 2
   if (mode === 2) {
     if (!c.openIds) {
       const r = await tmdb<{ results: { id: number; name: string }[] }>(env, '/search/company', { query: 'Blender' })
@@ -530,13 +557,23 @@ async function discoverFree(env: Env) {
   const c = await readCatalog(env)
   const today = new Date().toISOString().slice(0, 10)
   if (c.day !== today) { c.day = today; c.addedToday = 0 }
-  if (c.addedToday >= PER_DAY) return { added: 0, reason: 'daily limit' }
+  // Older entries didn't record runtime/genres: check a few per run, drop non-features.
+  const unchecked = c.items.filter(i => i.runtime === undefined).slice(0, 6)
+  for (const i of unchecked) {
+    try {
+      const info = await tmdb<{ runtime?: number; genres?: { name: string }[] }>(env, `/movie/${i.id}`)
+      i.runtime = info.runtime || 0
+      i.genres = (info.genres || []).map(g => g.name)
+    } catch { i.runtime = 0 }
+  }
+  c.items = c.items.filter(i => i.runtime === undefined || (i.runtime >= MIN_RUNTIME && !(i.genres || []).some(g => SKIP_GENRES.test(g))))
+  if (c.addedToday >= PER_DAY) { await env.BUCKET.put(CATALOG, JSON.stringify(c)); return { added: 0, reason: 'daily limit' } }
 
   const fresh = (await nextCandidates(env, c)).filter(x => !c.seen.includes(x.key))
   let added = 0
   let tried = 0
   for (const d of fresh) {
-    if (tried >= PER_RUN || c.addedToday >= PER_DAY) break
+    if (tried >= PER_RUN - Math.min(3, unchecked.length) || c.addedToday >= PER_DAY) break
     tried++
     c.seen.push(d.key)
     if (!d.title) continue
@@ -549,10 +586,13 @@ async function discoverFree(env: Env) {
       if (!m || c.items.some(i => i.id === m!.id)) continue
       // Family app: skip obscure (few votes) and adult/exploitation titles.
       if (m.adult || (m.vote_count || 0) < 25 || NOT_FAMILY.test(`${m.title} ${d.title}`)) continue
+      const info = await tmdb<{ runtime?: number; genres?: { name: string }[] }>(env, `/movie/${m.id}`)
+      const genres = (info.genres || []).map(g => g.name)
+      if ((info.runtime || 0) < MIN_RUNTIME || genres.some(g => SKIP_GENRES.test(g))) continue
       const f = await freeCopy(env, m.id)
-      if (!f.found) continue
+      if (!f.found || (f.file?.size || 0) < 200_000_000) continue // clips and trailers are small
       const l = lite(m, false)
-      c.items.unshift({ id: l.id, title: l.title, year: l.year, poster: l.poster, backdrop: l.backdrop, rating: l.rating, votes: m.vote_count || 0, why: f.why, source: f.source, addedAt: Date.now() })
+      c.items.unshift({ id: l.id, title: l.title, year: l.year, poster: l.poster, backdrop: l.backdrop, rating: l.rating, votes: m.vote_count || 0, runtime: info.runtime, genres, why: f.why, source: f.source, addedAt: Date.now() })
       c.addedToday++
       added++
     } catch { /* try the next one */ }
@@ -560,7 +600,7 @@ async function discoverFree(env: Env) {
   c.items = c.items.slice(0, 2000)
   c.seen = c.seen.slice(-8000)
   await env.BUCKET.put(CATALOG, JSON.stringify(c))
-  return { added, addedToday: c.addedToday, mode: (c.run || 0) % 3 }
+  return { added, addedToday: c.addedToday, mode: (c.run || 0) % 2 }
 }
 
 async function freeCopy(env: Env, id: number): Promise<Free> {
@@ -762,6 +802,11 @@ async function createJobInner(env: Env, raw: string, movieId?: number): Promise<
   try { url = new URL(raw) } catch { throw new Error('That is not a valid link') }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Only http and https links work')
 
+  if (looksLikeTorrentUrl(url)) {
+    const t = await fetchTorrentFile(url.toString())
+    if (t) return createMagnetJob(env, url.toString(), movieId, t)
+  }
+
   // Probe size, name and Range support with a 1-byte request.
   const probe = await fetch(url.toString(), { headers: { Range: 'bytes=0-0' }, redirect: 'follow' })
   if (!probe.ok) throw new Error(`The link answered with ${probe.status}`)
@@ -770,6 +815,10 @@ async function createJobInner(env: Env, raw: string, movieId?: number): Promise<
   const size = ranges ? Number(total) : Number(probe.headers.get('content-length') || -1)
   probe.body?.cancel()
   const ct = probe.headers.get('content-type') || ''
+  if (/bittorrent/i.test(ct)) {
+    const t = await fetchTorrentFile(url.toString())
+    if (t) return createMagnetJob(env, url.toString(), movieId, t)
+  }
   if (ct.startsWith('text/html')) throw new Error('That link opens a web page, not a file. Use a direct download link.')
   if (!ranges && size < 0) throw new Error('This server hides the file size, so it can’t be copied. Try another link.')
   if (!ranges && size > 5 * 1024 ** 3) throw new Error('This server doesn’t allow resuming, and files over 5 GB need that.')
@@ -1106,7 +1155,7 @@ export default {
       if (fr) return json(await freeCopy(env, Number(fr[1])), 200, cache(3600))
       if (path === '/api/free-catalog') {
         const c = await readCatalog(env)
-        return json({ items: catalogOrder(c.items.filter(i => !NOT_FAMILY.test(i.title))).slice(0, 300), addedToday: c.addedToday }, 200, cache(120))
+        return json({ items: catalogOrder(c.items.filter(i => !NOT_FAMILY.test(i.title) && (i.runtime === undefined || i.runtime >= MIN_RUNTIME))).slice(0, 300), addedToday: c.addedToday }, 200, cache(120))
       }
       if (path === '/api/free-catalog/discover' && req.method === 'POST') return json(await discoverFree(env))
       if (path === '/api/meta') {

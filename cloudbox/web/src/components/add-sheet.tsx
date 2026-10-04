@@ -20,6 +20,7 @@ export function guessTitle(link: string) {
   let name = ''
   if (/^magnet:/i.test(link)) name = new URLSearchParams(link.slice(link.indexOf('?') + 1)).get('dn') || ''
   else { try { name = decodeURIComponent(new URL(link).pathname.split('/').pop() || '') } catch { name = link } }
+  if (/^[a-f0-9]{32,40}$/i.test(name.replace(/\.torrent$/i, ''))) return { title: '', year: undefined } // just a hash, no title
   name = name.replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[._]+/g, ' ').replace(/\s+/g, ' ')
   const m = /^(.*\S)[\s([]+((?:19|20)\d{2})(?!\d)/.exec(name) // the last year: "Blade Runner 2049 2017"
   // Series packs: "Show.Name.S01.1080p" / "Show Name Season 2"
@@ -172,7 +173,7 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
   )
 
   return (
-    <Panel open={open} onOpenChange={onOpenChange} title={movieId && movie ? `${movie.tv ? 'Add episodes' : 'Add movie'}: ${movie.title}` : 'Add a movie or series'} description="Paste a magnet or download link you have the rights to.">
+    <Panel open={open} onOpenChange={onOpenChange} title={movieId && movie ? `${movie.tv ? 'Add episodes' : 'Add movie'}: ${movie.title}` : 'Add a movie or series'} description="Paste a magnet, .torrent or download link you have the rights to.">
       <Tabs defaultValue="link" onValueChange={v => v === 'existing' && loadExisting()} className="gap-4">
         <TabsList className="w-full">
           <TabsTrigger value="link">Link</TabsTrigger>
@@ -192,8 +193,8 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
               </div>
             )}
             <Field>
-              <FieldLabel htmlFor="link">Magnet or link</FieldLabel>
-              <Textarea id="link" value={link} onChange={e => setLink(e.target.value)} placeholder="magnet:?xt=urn:btih:… or https://…" className="min-h-24 font-mono text-sm" autoComplete="off" spellCheck={false} />
+              <FieldLabel htmlFor="link">Magnet, torrent or link</FieldLabel>
+              <Textarea id="link" value={link} onChange={e => setLink(e.target.value)} placeholder="magnet:?… or https://….torrent or a direct file link" className="min-h-24 font-mono text-sm" autoComplete="off" spellCheck={false} />
             </Field>
             {moviePicker}
             <button className="btn-black flex h-12 items-center justify-center gap-2 rounded-full text-base font-semibold disabled:opacity-50" disabled={busy || !isLink(link.trim())} onClick={start}>
