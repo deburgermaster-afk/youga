@@ -133,6 +133,10 @@
 html { color-scheme: dark; -webkit-text-size-adjust: 100%; }
 /* Dark base sits on <html>; body stays transparent so the glow layer shows. */
 html { background: #07070a; overscroll-behavior-y: none; }
+/* iOS home-screen app with a translucent status bar: the page starts under
+   the status bar but keeps its old height, leaving an empty strip at the
+   bottom. Make the document tall enough to reach the real screen bottom. */
+html { min-height: calc(100% + env(safe-area-inset-top)); }
 body { background: transparent !important; overscroll-behavior-y: none; }
 body { min-height: 100dvh; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 /* Inputs at 16px so iOS never zooms on focus. */
