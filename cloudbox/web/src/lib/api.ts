@@ -101,6 +101,12 @@ export const api = {
   logout: () => req('/api/logout', post()),
   jobs: () => req<{ jobs: Job[] }>('/api/jobs'),
   add: (url: string, movieId?: number) => req<Job>('/api/jobs', post({ url, movieId })),
+  addTorrent: (file: File, movieId?: number) => {
+    const form = new FormData()
+    form.set('file', file)
+    if (movieId) form.set('movieId', String(movieId))
+    return req<Job>('/api/jobs/torrent', { method: 'POST', body: form })
+  },
   library: () => req<{ movies: Movie[] }>('/api/library'),
   addMovie: (id: number, addedBy?: string) => req<Movie>('/api/library', post({ id, addedBy })),
   removeMovie: (id: number) => req(`/api/library/${id}`, { method: 'DELETE' }),

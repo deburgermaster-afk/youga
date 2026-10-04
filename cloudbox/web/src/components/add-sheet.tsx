@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Check, Play, Search } from 'lucide-react'
+import { Check, FileUp, Play, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
@@ -52,6 +52,17 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
 }) {
   const { profile, addOrAsk } = useApp()
   const [link, setLink] = useState('')
+  const [torrent, setTorrent] = useState<{ file: File; name: string } | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+  // Read the movie name out of a picked .torrent file ("4:name<len>:<name>").
+  const pickTorrent = async (file?: File) => {
+    if (!file) return
+    const text = new TextDecoder().decode(new Uint8Array(await file.arrayBuffer()).subarray(0, 64 * 1024))
+    const m = /4:name(\d+):/.exec(text)
+    const name = m ? text.slice(m.index + m[0].length, m.index + m[0].length + Number(m[1])) : file.name.replace(/\.torrent$/i, '')
+    setTorrent({ file, name })
+    setLink('')
+  }
   const [movie, setMovie] = useState<MovieLite | null>(null)
   const [choices, setChoices] = useState<MovieLite[]>([])
   const [q, setQ] = useState('')
@@ -71,7 +82,7 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
   // Reset; preselect the movie when opened from its page.
   useEffect(() => {
     if (!open) return
-    setLink(''); setQ(''); setChoices([]); setExisting(null)
+    setLink(''); setTorrent(null); setQ(''); setChoices([]); setExisting(null)
     if (movieId) {
       const m = library.find(x => x.id === movieId)
       setMovie(m ? { id: m.id, title: m.title, year: m.year || '', poster: m.poster || '', backdrop: m.backdrop || '', rating: m.rating || 0, overview: m.overview || '' } : null)
@@ -81,8 +92,9 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
 
   // Guess the movie from the pasted link's file name.
   useEffect(() => {
-    if (movieId || !isLink(link.trim())) return
-    const { title, year } = guessTitle(link.trim())
+    const from = torrent ? `magnet:?dn=${encodeURIComponent(torrent.name)}` : link.trim()
+    if (movieId || !isLink(from)) return
+    const { title, year } = guessTitle(from)
     if (!title) return
     setQ(year ? `${title} ${year}` : title)
     api.search(title).then(r => {
@@ -90,7 +102,7 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
       setChoices(sorted.slice(0, 6))
       setMovie(sorted[0] ?? null)
     }).catch(() => {})
-  }, [link, movieId])
+  }, [link, torrent, movieId])
 
   const searchMovies = async () => {
     if (!q.trim()) return
@@ -103,11 +115,11 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
 
   const start = async () => {
     const l = link.trim()
-    if (!isLink(l)) return toast.error('Paste a magnet link or a direct download link')
+    if (!torrent && !isLink(l)) return toast.error('Paste a magnet, torrent or download link, or choose a .torrent file')
     setBusy(true)
     try {
       if (movie) await ensureInVault(movie)
-      const job = await api.add(l, movie?.id)
+      const job = torrent ? await api.addTorrent(torrent.file, movie?.id) : await api.add(l, movie?.id)
       toast.success(movie ? `Adding ${movie.title}` : 'Adding movie', { description: job.name })
       onDone(); onOpenChange(false)
     } catch (e) {
@@ -194,10 +206,15 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
             )}
             <Field>
               <FieldLabel htmlFor="link">Magnet, torrent or link</FieldLabel>
-              <Textarea id="link" value={link} onChange={e => setLink(e.target.value)} placeholder="magnet:?… or https://….torrent or a direct file link" className="min-h-24 font-mono text-sm" autoComplete="off" spellCheck={false} />
+              <Textarea id="link" value={link} onChange={e => { setLink(e.target.value); if (e.target.value) setTorrent(null) }} placeholder="magnet:?… or https://….torrent or a direct file link" className="min-h-24 font-mono text-sm" autoComplete="off" spellCheck={false} />
             </Field>
+            <input ref={fileInput} type="file" accept=".torrent,application/x-bittorrent" className="hidden" onChange={e => { void pickTorrent(e.target.files?.[0]); e.target.value = '' }} />
+            <button type="button" onClick={() => fileInput.current?.click()} className="btn-black flex h-11 items-center justify-center gap-2 rounded-full text-sm font-medium">
+              <FileUp className="size-4 text-orange-400" />
+              {torrent ? <span className="max-w-[16rem] truncate">{torrent.name || torrent.file.name}</span> : 'Choose a .torrent file'}
+            </button>
             {moviePicker}
-            <button className="btn-black flex h-12 items-center justify-center gap-2 rounded-full text-base font-semibold disabled:opacity-50" disabled={busy || !isLink(link.trim())} onClick={start}>
+            <button className="btn-black flex h-12 items-center justify-center gap-2 rounded-full text-base font-semibold disabled:opacity-50" disabled={busy || (!torrent && !isLink(link.trim()))} onClick={start}>
               {busy && <Spinner />} {movie?.tv ? 'Add series' : 'Add movie'}
             </button>
             {movie && !library.some(x => x.id === movie.id) && (

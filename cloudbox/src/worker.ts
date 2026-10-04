@@ -785,8 +785,8 @@ async function serveTorbox(req: Request, env: Env, torrentId: number, fileId: nu
   return new Response(up.body, { status: up.status, headers })
 }
 
-async function createJob(env: Env, raw: string, movieId?: number): Promise<Job> {
-  const job = await createJobInner(env, raw, movieId)
+async function createJob(env: Env, raw: string, movieId?: number, torrentFile?: Uint8Array): Promise<Job> {
+  const job = torrentFile ? await createMagnetJob(env, raw, movieId, torrentFile) : await createJobInner(env, raw, movieId)
   if (movieId) {
     await updateLibrary(env, list => {
       const m = list.find(x => x.id === movieId)
@@ -1072,6 +1072,18 @@ export default {
         return json({ jobs })
       }
 
+      // An uploaded .torrent file (picked from the phone).
+      if (path === '/api/jobs/torrent' && req.method === 'POST') {
+        const form = await req.formData().catch(() => null)
+        const file = form?.get('file')
+        if (!file || typeof file === 'string') return json({ error: 'Choose a .torrent file' }, 400)
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        if (bytes.length > 8 * 1024 * 1024 || !isBencodedTorrent(bytes)) return json({ error: 'That isn’t a .torrent file' }, 400)
+        const movieId = Number(form!.get('movieId')) || undefined
+        const job = await createJob(env, file.name || 'upload.torrent', movieId, bytes)
+        ctx.waitUntil(step(env, job.id, 1))
+        return json(job)
+      }
       if (path === '/api/jobs' && req.method === 'POST') {
         const { url: link, movieId } = (await req.json().catch(() => ({}))) as { url?: string; movieId?: number }
         if (!link) return json({ error: 'Paste a link first' }, 400)
