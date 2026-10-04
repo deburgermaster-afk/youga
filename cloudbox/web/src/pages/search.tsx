@@ -104,13 +104,6 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
     return () => { live = false }
   }, [idsKey])
 
-  // One tap: add the free copy to the vault and start playing.
-  const playFree = async (m: FreeItem) => {
-    setAdding(m.id)
-    await addOrAsk({ id: m.id, title: m.title })
-    setAdding(null)
-  }
-
   const playNow = async (m: Movie) => {
     setStarting(m.id)
     await playMovie(play, m, m.files[0])
@@ -193,8 +186,7 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
           {!!free?.length && (
             <section className="space-y-2.5">
               <div className="flex items-baseline justify-between">
-                <h2 className="font-display text-[17px] font-bold tracking-tight">Free to watch</h2>
-                <span className="text-[11px] text-white/45">Public domain & open movies · one tap</span>
+                <h2 className="font-display text-[17px] font-bold tracking-tight">Ready to watch</h2>
               </div>
               <div className="grid grid-cols-3 gap-x-2.5 gap-y-3 sm:grid-cols-5 lg:grid-cols-7">
                 {free.map((m, i) => (
@@ -204,12 +196,9 @@ export function SearchPage({ library, jobs, onOpen, onAdd, onSettings }: {
                     index={i}
                     title={m.title}
                     poster={m.poster}
-                    sub={[m.year, m.why === 'Public domain' ? 'Public domain' : 'Open movie'].filter(Boolean).join(' · ')}
+                    sub={m.year}
                     rating={m.rating}
-                    onClick={() => playFree(m)}
-                    badge={adding === m.id
-                      ? <span className="btn-black flex size-7 items-center justify-center rounded-full"><Spinner /></span>
-                      : <span className="flex items-center gap-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[10px] font-bold text-black"><Play className="size-2.5 fill-black" />Free</span>}
+                    onClick={() => onOpen(m.id)}
                   />
                 ))}
               </div>

@@ -183,11 +183,11 @@ export function AddSheet({ open, onOpenChange, movieId, library, onDone }: {
             {free?.found && movie && (
               <div className="glass flex items-center gap-3 rounded-2xl p-3">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold">Free copy available</p>
-                  <p className="truncate text-xs text-white/55"><span className="text-emerald-400">{free.why}</span> · {free.source}</p>
+                  <p className="text-sm font-semibold">Ready to watch</p>
+                  <p className="truncate text-xs text-white/55">{free.source}</p>
                 </div>
                 <button onClick={() => { onOpenChange(false); void addOrAsk(movie) }} className="btn-black flex h-10 shrink-0 items-center gap-1.5 rounded-full px-4 text-sm font-semibold">
-                  <Play className="size-4 fill-orange-400 text-orange-400" /> Add & play
+                  <Play className="size-4 fill-orange-400 text-orange-400" /> Play
                 </button>
               </div>
             )}

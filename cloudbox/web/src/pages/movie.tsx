@@ -250,7 +250,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
                 {adding ? <Spinner /> : free?.found
                   ? <Play className="size-5 fill-orange-400 text-orange-400" />
                   : <Plus className="size-5 text-orange-400" strokeWidth={2.5} />}
-                {isTv ? 'Add series' : free?.found ? 'Play free' : 'Add movie'}
+                {isTv ? 'Add series' : free?.found ? 'Play' : 'Add movie'}
               </button>
               {!entry && (
                 <button onClick={addToVault} disabled={busy} className="btn-black flex h-12 items-center justify-center gap-2 rounded-full px-5 text-[15px] font-semibold">
@@ -260,10 +260,9 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
             </div>
             {!isTv && (
               <p className="px-1 text-[12px] text-white/50">
-                {!free ? 'Checking for a free, legal copy…'
-                  : free.found
-                    ? <>Free & legal: <span className="text-emerald-400">{free.why}</span> · <a href={free.page} target="_blank" rel="noreferrer" className="underline underline-offset-2">{free.source}</a>{free.file?.size ? ` · ${bytes(free.file.size)}` : ''}</>
-                    : 'No free copy found. Add movie asks for a magnet link.'}
+                {free?.found
+                  ? <>Ready to watch · <a href={free.page} target="_blank" rel="noreferrer" className="underline underline-offset-2">{free.source}</a>{free.file?.size ? ` · ${bytes(free.file.size)}` : ''}</>
+                  : free ? 'Add movie asks for a magnet link.' : '\u00a0'}
               </p>
             )}
           </div>

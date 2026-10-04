@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Captions, Gauge, Link2, PictureInPicture2, SkipForward } from 'lucide-react'
+import { Captions, Gauge, Link2, PictureInPicture2, SkipForward, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -77,10 +77,20 @@ export function Player({ media, onClose }: { media: Media | null; onClose: () =>
 
   return (
     <Dialog open={!!media} onOpenChange={o => { if (!o) close() }}>
-      <DialogContent className="flex h-dvh w-screen max-w-none flex-col gap-0 rounded-none border-0 bg-black p-0 sm:max-w-none md:h-auto md:max-h-[92dvh] md:w-[min(94vw,1280px)] md:rounded-xl md:border">
-        <div className="border-b px-4 py-3 pr-12">
-          <DialogTitle className="truncate text-sm">{media?.ep ? `${media.title} · ${media.ep}` : media?.title || media?.name}</DialogTitle>
-          <DialogDescription className="sr-only">Media player</DialogDescription>
+      <DialogContent
+        showCloseButton={false}
+        className="flex h-dvh w-screen max-w-none flex-col gap-0 rounded-none border-0 bg-black p-0 sm:max-w-none md:h-auto md:max-h-[92dvh] md:w-[min(94vw,1280px)] md:rounded-xl md:border
+          data-open:duration-500 data-open:zoom-in-75 data-open:ease-[cubic-bezier(.16,1,.3,1)] data-closed:duration-300 data-closed:zoom-out-90"
+      >
+        {/* Header clears the iPhone status bar / Dynamic Island. */}
+        <div className="flex items-center gap-3 border-b border-white/10 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
+          <div className="min-w-0 flex-1">
+            <DialogTitle className="truncate font-display text-base font-bold">{media?.title || media?.name}</DialogTitle>
+            <DialogDescription className="truncate text-xs text-white/50">{media?.ep || 'Now playing'}</DialogDescription>
+          </div>
+          <button onClick={close} aria-label="Close player" className="btn-black flex size-10 shrink-0 items-center justify-center rounded-full">
+            <X className="size-5" />
+          </button>
         </div>
 
         <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
