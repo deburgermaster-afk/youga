@@ -455,15 +455,75 @@ type Free = {
 // each film to TMDB, checks it with the same rules as freeCopy, and keeps the
 // ones that pass: up to 30 new films a day, a few per run.
 const CATALOG = '.cloudbox/free-catalog.json'
-const PER_DAY = 30
-const PER_RUN = 4
-type CatalogItem = { id: number; title: string; year: string; poster: string; backdrop: string; rating: number; why?: string; source?: string; addedAt: number }
-type Catalog = { items: CatalogItem[]; seen: string[]; day: string; addedToday: number; page: number }
+const PER_DAY = 150
+const PER_RUN = 5
+const NOT_FAMILY = /\b(sex|sexy|nud(e|ist)|strip|burlesque|erotic|orgy|orgies|lust|porn|playboy|bikini)\w*/i
+type CatalogItem = { id: number; title: string; year: string; poster: string; backdrop: string; rating: number; votes?: number; why?: string; source?: string; addedAt: number }
+type Catalog = {
+  items: CatalogItem[]; seen: string[]; day: string; addedToday: number
+  page: number // most-downloaded public-domain films
+  newPage?: number // newest public-domain films
+  openPage?: number // open-movie studios (Blender) on TMDB, newest first
+  openIds?: number[] // TMDB company ids for those studios
+  run?: number
+}
 
 async function readCatalog(env: Env): Promise<Catalog> {
   const o = await env.BUCKET.get(CATALOG)
   const c = o ? ((await o.json()) as Catalog) : null
   return c || { items: [], seen: [], day: '', addedToday: 0, page: 1 }
+}
+
+// Popular and newer films first: TMDB votes, boosted for recent years.
+const catalogOrder = (items: CatalogItem[]) => [...items].sort((a, b) => score(b) - score(a))
+function score(i: CatalogItem) {
+  const y = Number(i.year) || 1900
+  return Math.log10((i.votes || 10) + 1) * (i.rating || 5) * (y >= 2000 ? 2 : y >= 1970 ? 1.5 : y >= 1950 ? 1.15 : 1)
+}
+
+type Cand = { key: string; title: string; year: number; movie?: TmdbLite }
+
+// Where to look this run. Three sources take turns so the list gets popular
+// classics, the newest public-domain titles, and recent open movies.
+async function nextCandidates(env: Env, c: Catalog): Promise<Cand[]> {
+  const mode = (c.run = (c.run || 0) + 1) % 3
+  if (mode === 2) {
+    if (!c.openIds) {
+      const r = await tmdb<{ results: { id: number; name: string }[] }>(env, '/search/company', { query: 'Blender' })
+      c.openIds = r.results.filter(x => /blender/i.test(x.name)).map(x => x.id).slice(0, 5)
+    }
+    if (!c.openIds.length) return []
+    const page = c.openPage || 1
+    const r = await tmdb<{ results: TmdbLite[]; total_pages?: number }>(env, '/discover/movie', {
+      with_companies: c.openIds.join('|'), sort_by: 'primary_release_date.desc', page: String(page),
+    })
+    const out = r.results.map(m => ({ key: `tmdb:${m.id}`, title: m.title || '', year: Number((m.release_date || '').slice(0, 4)), movie: m }))
+    if (!out.some(x => !c.seen.includes(x.key))) c.openPage = page < (r.total_pages || 1) ? page + 1 : 1
+    return out
+  }
+  const newest = mode === 1
+  const page = (newest ? c.newPage : c.page) || 1
+  const u = new URL('https://archive.org/advancedsearch.php')
+  const cols = [...CURATED].filter(x => x !== 'classic_tv' && x !== 'classic_cartoons').join(' OR ')
+  u.searchParams.set('q', `mediatype:movies AND collection:(${cols})${newest ? ' AND year:[1960 TO 2100]' : ''}`)
+  for (const f of ['identifier', 'title', 'year']) u.searchParams.append('fl[]', f)
+  u.searchParams.set('rows', '30')
+  u.searchParams.set('page', String(page))
+  u.searchParams.append('sort[]', newest ? 'year desc' : 'downloads desc')
+  u.searchParams.set('output', 'json')
+  const r = await fetch(u.toString())
+  if (!r.ok) return []
+  const docs = ((await r.json()) as { response?: { docs?: { identifier: string; title?: string; year?: string | number }[] } }).response?.docs || []
+  const out = docs.map(d => ({
+    key: d.identifier,
+    title: String(d.title || '').replace(/\(\d{4}\)|\[.*?\]/g, '').trim(),
+    year: Number(d.year) || Number(/\b(19|20)\d\d\b/.exec(String(d.title))?.[0]) || 0,
+  }))
+  if (!out.some(x => !c.seen.includes(x.key))) {
+    const next = docs.length ? page + 1 : 1 // this page is done (or wrapped around)
+    if (newest) c.newPage = next; else c.page = next
+  }
+  return out
 }
 
 async function discoverFree(env: Env) {
@@ -472,46 +532,35 @@ async function discoverFree(env: Env) {
   if (c.day !== today) { c.day = today; c.addedToday = 0 }
   if (c.addedToday >= PER_DAY) return { added: 0, reason: 'daily limit' }
 
-  const u = new URL('https://archive.org/advancedsearch.php')
-  u.searchParams.set('q', `mediatype:movies AND collection:(${[...CURATED].filter(x => x !== 'classic_tv' && x !== 'classic_cartoons').join(' OR ')})`)
-  for (const f of ['identifier', 'title', 'year']) u.searchParams.append('fl[]', f)
-  u.searchParams.set('rows', '25')
-  u.searchParams.set('page', String(c.page))
-  u.searchParams.append('sort[]', 'downloads desc')
-  u.searchParams.set('output', 'json')
-  const r = await fetch(u.toString())
-  if (!r.ok) return { added: 0, reason: 'archive ' + r.status }
-  const docs = ((await r.json()) as { response?: { docs?: { identifier: string; title?: string; year?: string | number }[] } }).response?.docs || []
-  const fresh = docs.filter(d => !c.seen.includes(d.identifier))
-  if (!fresh.length) c.page = docs.length ? c.page + 1 : 1 // this page is done (or wrapped around)
-
+  const fresh = (await nextCandidates(env, c)).filter(x => !c.seen.includes(x.key))
   let added = 0
   let tried = 0
   for (const d of fresh) {
     if (tried >= PER_RUN || c.addedToday >= PER_DAY) break
     tried++
-    c.seen.push(d.identifier)
-    const title = String(d.title || '').replace(/\(\d{4}\)|\[.*?\]/g, '').trim()
-    const year = Number(d.year) || Number(/\b(19|20)\d\d\b/.exec(String(d.title))?.[0]) || 0
-    if (!title) continue
+    c.seen.push(d.key)
+    if (!d.title) continue
     try {
-      const s = await tmdb<{ results: TmdbLite[] }>(env, '/search/movie', { query: title, ...(year ? { year: String(year) } : {}) })
-      const m = s.results.find(x => !year || Math.abs(Number((x.release_date || '').slice(0, 4)) - year) <= 1)
-      if (!m || c.items.some(i => i.id === m.id)) continue
+      let m = d.movie
+      if (!m) {
+        const s = await tmdb<{ results: TmdbLite[] }>(env, '/search/movie', { query: d.title, ...(d.year ? { year: String(d.year) } : {}) })
+        m = s.results.find(x => !d.year || Math.abs(Number((x.release_date || '').slice(0, 4)) - d.year) <= 1)
+      }
+      if (!m || c.items.some(i => i.id === m!.id)) continue
       // Family app: skip obscure (few votes) and adult/exploitation titles.
-      if (m.adult || (m.vote_count || 0) < 25 || /\b(sex|sexy|nud(e|ist)|strip|burlesque|erotic)\w*/i.test(`${m.title} ${title}`)) continue
+      if (m.adult || (m.vote_count || 0) < 25 || NOT_FAMILY.test(`${m.title} ${d.title}`)) continue
       const f = await freeCopy(env, m.id)
       if (!f.found) continue
       const l = lite(m, false)
-      c.items.unshift({ id: l.id, title: l.title, year: l.year, poster: l.poster, backdrop: l.backdrop, rating: l.rating, why: f.why, source: f.source, addedAt: Date.now() })
+      c.items.unshift({ id: l.id, title: l.title, year: l.year, poster: l.poster, backdrop: l.backdrop, rating: l.rating, votes: m.vote_count || 0, why: f.why, source: f.source, addedAt: Date.now() })
       c.addedToday++
       added++
     } catch { /* try the next one */ }
   }
-  c.items = c.items.slice(0, 400)
-  c.seen = c.seen.slice(-3000)
+  c.items = c.items.slice(0, 2000)
+  c.seen = c.seen.slice(-8000)
   await env.BUCKET.put(CATALOG, JSON.stringify(c))
-  return { added, addedToday: c.addedToday, page: c.page }
+  return { added, addedToday: c.addedToday, mode: (c.run || 0) % 3 }
 }
 
 async function freeCopy(env: Env, id: number): Promise<Free> {
@@ -1057,7 +1106,7 @@ export default {
       if (fr) return json(await freeCopy(env, Number(fr[1])), 200, cache(3600))
       if (path === '/api/free-catalog') {
         const c = await readCatalog(env)
-        return json({ items: c.items, addedToday: c.addedToday }, 200, cache(120))
+        return json({ items: catalogOrder(c.items.filter(i => !NOT_FAMILY.test(i.title))).slice(0, 300), addedToday: c.addedToday }, 200, cache(120))
       }
       if (path === '/api/free-catalog/discover' && req.method === 'POST') return json(await discoverFree(env))
       if (path === '/api/meta') {
