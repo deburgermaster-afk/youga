@@ -17,7 +17,8 @@ import { LoginPage } from '@/pages/login'
 import { ProfilesPage } from '@/pages/profiles'
 import { useJobs } from '@/hooks/use-jobs'
 import { api, type Movie } from '@/lib/api'
-import { loadPrefs, savePrefs, setLinkToken, type Prefs } from '@/lib/links'
+import { absolute, copy, loadPrefs, openInApp, opensExternally, preferredPlayer, savePrefs, setLinkToken, type Prefs } from '@/lib/links'
+import { isAudio, isImage } from '@/lib/api'
 import { profileById, sessionProfile, setSessionProfile, type ProfileId } from '@/lib/profiles'
 import { AppContext, type Media } from '@/lib/app-context'
 import { cn } from '@/lib/utils'
@@ -103,7 +104,15 @@ export default function App() {
   const setPrefs = useCallback((p: Prefs) => { setPrefsState(p); savePrefs(p) }, [])
   // Playing a vault movie logs it for the contributions calendar.
   const play = useCallback((m: Media) => {
-    setMedia(m)
+    if (opensExternally() && !isImage(m.name) && !isAudio(m.name)) {
+      const app = preferredPlayer(loadPrefs())
+      const label = m.ep ? `${m.title} · ${m.ep}` : m.title || m.name
+      void copy(absolute(m.url))
+      openInApp(app, m.url, label, () => toast(`${app.label} didn’t open`, {
+        description: `The link is copied: open ${app.label} → Network/URL stream → paste. You can change the player in Settings.`,
+        duration: 7000,
+      }))
+    } else setMedia(m)
     if (m.movieId && profile) api.watched(m.movieId, profile).then(loadLibrary).catch(() => {})
   }, [profile, loadLibrary])
   const addOrAsk = useCallback(async (m: { id: number; title: string }) => {

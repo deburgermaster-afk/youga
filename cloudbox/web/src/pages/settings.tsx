@@ -127,7 +127,7 @@ export function SettingsPage({ authRequired, onLogout, onSwitchProfile, onFiles,
             <Field orientation="horizontal">
               <FieldContent>
                 <FieldLabel htmlFor="auto">Open videos in app automatically</FieldLabel>
-                <FieldDescription>Play launches your player app instead of the browser.</FieldDescription>
+                <FieldDescription>Play opens the movie straight in the player below instead of the built-in player.</FieldDescription>
               </FieldContent>
               <Switch id="auto" checked={prefs.autoOpen} onCheckedChange={v => setPrefs({ ...prefs, autoOpen: v })} />
             </Field>

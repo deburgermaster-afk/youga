@@ -110,3 +110,6 @@ export function preferredPlayer(p: Prefs) {
   const list = playersFor(platform())
   return list.find(x => x.id === p.player) || list[0]
 }
+
+// Settings → "Open in player app": Play hands the video to that app instead.
+export const opensExternally = () => loadPrefs().autoOpen && platform() !== 'desktop'

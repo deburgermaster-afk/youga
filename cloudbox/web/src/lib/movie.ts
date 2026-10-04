@@ -1,6 +1,7 @@
 import { api, movieFileUrl, type Entry, type Movie, type MovieFile } from '@/lib/api'
 import { subtitlesFor } from '@/components/file-row'
 import type { Media, QueueItem } from '@/lib/app-context'
+import { opensExternally } from '@/lib/links'
 
 // PR = personal rating: the family's average of 1-10 scores.
 export function pr(m?: Pick<Movie, 'ratings'> | null) {
@@ -30,5 +31,9 @@ export async function subsFor(f: MovieFile) {
 }
 
 export async function playMovie(play: (m: Media) => void, m: Pick<Movie, 'id' | 'title'>, f: MovieFile, opts: { ep?: string; queue?: QueueItem[] } = {}) {
-  play({ url: movieFileUrl(f), name: f.name, title: m.title, movieId: m.id, subs: await subsFor(f), ...opts })
+  const base = { url: movieFileUrl(f), name: f.name, title: m.title, movieId: m.id, ...opts }
+  // Opening another app must happen right in the tap (iOS blocks it after a
+  // wait), so skip loading subtitles first; the app finds its own.
+  if (opensExternally()) return play(base)
+  play({ ...base, subs: await subsFor(f) })
 }
