@@ -13,6 +13,7 @@ import { SearchPage } from '@/pages/search'
 import { TimelinePage } from '@/pages/timeline'
 import { ContributionsPage } from '@/pages/contributions'
 import { SettingsPage } from '@/pages/settings'
+import { DiscoverPage, warmReels } from '@/pages/discover'
 import { LoginPage } from '@/pages/login'
 import { ProfilesPage } from '@/pages/profiles'
 import { useJobs } from '@/hooks/use-jobs'
@@ -66,6 +67,9 @@ export default function App() {
   const [add, setAdd] = useState<{ open: boolean; movieId?: number }>({ open: false })
   const [library, setLibrary] = useState<Movie[] | null>(() => remembered(LIB))
   const [rating, setRating] = useState<RateTarget | null>(null)
+  // Trailer sound, remembered on this device (browsers need one tap first).
+  const [sound, setSoundState] = useState(() => remembered<boolean>('cloudbox:sound') !== false) // on unless turned off
+  const setSound = useCallback((on: boolean) => { setSoundState(on); remember('cloudbox:sound', on) }, [])
   const { jobs, refresh } = useJobs(!!auth?.ok && !!profile)
 
   useEffect(() => {
@@ -79,6 +83,8 @@ export default function App() {
     Object.values(load).forEach(f => f().catch(() => {}))
     api.trending().catch(() => {})
     api.freeCatalog().catch(() => {})
+    // Reels: newest list + the first 10 trailers ready before the tab is opened.
+    void warmReels()
   }, [])
 
   const loadLibrary = useCallback(() => {
@@ -134,7 +140,7 @@ export default function App() {
     }
     setAdd({ open: true, movieId: m.id })
   }, [profile, play, loadLibrary])
-  const ctx = useMemo(() => ({ prefs, setPrefs, play, profile: profile || 'tj', rate: setRating, playing: !!media, addOrAsk }), [prefs, setPrefs, play, profile, media, addOrAsk])
+  const ctx = useMemo(() => ({ prefs, setPrefs, play, profile: profile || 'tj', rate: setRating, playing: !!media, addOrAsk, sound, setSound }), [prefs, setPrefs, play, profile, media, addOrAsk, sound, setSound])
 
   if (!auth) return <div className="flex min-h-dvh items-center justify-center bg-[#07070a]"><Spinner className="size-6" /></div>
   if (!auth.ok) {
@@ -185,6 +191,8 @@ export default function App() {
           </div>
           <FilesPage />
         </div>
+      ) : page === 'discover' ? (
+        <DiscoverPage library={library ?? []} onOpen={openMovie} />
       ) : (
         <>
           <header className="sticky top-0 z-30 pt-[env(safe-area-inset-top)] [view-transition-name:header]">

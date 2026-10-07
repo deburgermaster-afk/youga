@@ -1155,6 +1155,29 @@ export default {
         const r = await tmdb<{ results: TmdbLite[] }>(env, '/search/multi', { query: q, include_adult: 'false' })
         return json({ results: moviesAndShows(r.results) }, 200, cache(600))
       }
+      // Discover feed: popular releases in a year range, optionally one genre.
+      if (path === '/api/tmdb/discover') {
+        const now = new Date().getFullYear()
+        const from = Number(url.searchParams.get('from')) || now - 1
+        const to = Number(url.searchParams.get('to')) || now
+        const genre = url.searchParams.get('genre') || ''
+        const page = Math.min(50, Number(url.searchParams.get('page')) || 1)
+        const today = new Date().toISOString().slice(0, 10)
+        // days=N: only what came out in the last N days (the newest reels).
+        const days = Number(url.searchParams.get('days')) || 0
+        const since = days ? new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10) : `${from}-01-01`
+        const r = await tmdb<{ results: TmdbLite[]; total_pages?: number }>(env, '/discover/movie', {
+          'primary_release_date.gte': since,
+          'primary_release_date.lte': to >= now ? today : `${to}-12-31`,
+          sort_by: 'popularity.desc', 'vote_count.gte': '15', include_adult: 'false', page: String(page),
+          ...(genre ? { with_genres: genre } : {}),
+        })
+        return json({ results: r.results.map(m => lite(m, false)), totalPages: r.total_pages || 1 }, 200, cache(1800))
+      }
+      if (path === '/api/tmdb/genres') {
+        const r = await tmdb<{ genres: { id: number; name: string }[] }>(env, '/genre/movie/list')
+        return json(r, 200, cache(86400))
+      }
       if (path === '/api/tmdb/trending') {
         const r = await tmdb<{ results: TmdbLite[] }>(env, '/trending/all/week')
         return json({ results: moviesAndShows(r.results) }, 200, cache(3600))

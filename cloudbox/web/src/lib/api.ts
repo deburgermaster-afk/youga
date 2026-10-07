@@ -119,6 +119,10 @@ export const api = {
     .then(r => { searches.set(q.trim().toLowerCase(), r.results); seed(r.results); return r }),
   freeCatalog: () => req<{ items: FreeItem[]; addedToday: number }>('/api/free-catalog')
     .then(r => { freeList = r.items; seed(r.items.map(i => ({ ...i, overview: '' }))); return r }),
+  discover: (o: { from: number; to: number; genre?: number; page: number; days?: number }) =>
+    req<{ results: MovieLite[]; totalPages: number }>(`/api/tmdb/discover?from=${o.from}&to=${o.to}&page=${o.page}${o.genre ? `&genre=${o.genre}` : ''}${o.days ? `&days=${o.days}` : ''}`)
+      .then(r => { seed(r.results); return r }),
+  genres: () => req<{ genres: { id: number; name: string }[] }>('/api/tmdb/genres'),
   trending: () => req<{ results: MovieLite[] }>('/api/tmdb/trending')
     .then(r => { trendingList = r.results; seed(r.results); return r }),
   // Title pages are fetched once and kept, so opening one again (or after a prefetch) is instant.

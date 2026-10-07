@@ -4,12 +4,18 @@ import { useEffect, useRef, useState } from 'react'
 // It stays invisible until it's actually playing, then fades in over the
 // poster, so the YouTube loading screen, title and errors never show.
 // Talks to the embed with YouTube's postMessage protocol (no script needed).
-export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError }: {
+export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError, onEnded, onSoundBlocked, loop = true, captions = false, fit = false, revealMs = 1200 }: {
   videoKey: string
   muted: boolean
   paused: boolean
   onPlaying: (playing: boolean) => void
   onError: () => void
+  onEnded?: () => void // fires when it finishes (with loop off)
+  onSoundBlocked?: () => void // the phone stopped it when sound came on
+  loop?: boolean
+  captions?: boolean // YouTube subtitles on
+  fit?: boolean // whole 16:9 picture centred (reels) instead of filling the box
+  revealMs?: number // wait before showing it, so YouTube's title overlay is gone
 }) {
   const box = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLIFrameElement>(null)
@@ -18,6 +24,14 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError 
   const [onScreen, setOnScreen] = useState(true)
   const mutedRef = useRef(muted)
   mutedRef.current = muted
+  const onEndedRef = useRef(onEnded)
+  onEndedRef.current = onEnded
+  const blockedRef = useRef(onSoundBlocked)
+  blockedRef.current = onSoundBlocked
+  const pausedRef = useRef(paused)
+  pausedRef.current = paused
+  const onScreenRef = useRef(true)
+  const unmutedAt = useRef(0)
 
   const ready = useRef(false)
   // Commands only once the player has answered; earlier ones make it throw.
@@ -30,11 +44,11 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError 
     const el = box.current
     if (!el) return
     const ro = new ResizeObserver(() => {
-      const s = Math.max(el.clientWidth / 16, el.clientHeight / 9) * 1.18
+      const s = (fit ? Math.min(el.clientWidth / 16, el.clientHeight / 9) : Math.max(el.clientWidth / 16, el.clientHeight / 9) * 1.18)
       setSize({ w: Math.ceil(16 * s), h: Math.ceil(9 * s) })
     })
     ro.observe(el)
-    const io = new IntersectionObserver(([e]) => setOnScreen(e.intersectionRatio > 0.15), { threshold: [0, 0.15, 0.5] })
+    const io = new IntersectionObserver(([e]) => { onScreenRef.current = e.intersectionRatio > 0.15; setOnScreen(onScreenRef.current) }, { threshold: [0, 0.15, 0.5] })
     io.observe(el)
     return () => { ro.disconnect(); io.disconnect() }
   }, [])
@@ -54,12 +68,20 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError 
         ready.current = true
         send('addEventListener', ['onStateChange'])
         send('addEventListener', ['onError'])
+        // Preloaded in the background: buffer, then wait until it's on screen.
+        if (pausedRef.current || !onScreenRef.current) send('pauseVideo')
       }
       const state = data.event === 'onStateChange' ? data.info : data.event === 'infoDelivery' ? (data.info as { playerState?: number })?.playerState : undefined
-      if (state === 1 && !reveal) {
-        if (!mutedRef.current) send('unMute') // a new trailer starts muted
+      if (state === 1 && !reveal && !pausedRef.current) {
+        if (!mutedRef.current) { send('unMute'); unmutedAt.current = Date.now() } // a new trailer starts muted
         // Wait a beat so YouTube's opening title overlay is gone.
-        reveal = setTimeout(() => { setVisible(true); onPlaying(true) }, 1200)
+        reveal = setTimeout(() => { setVisible(true); onPlaying(true) }, revealMs)
+      }
+      if (state === 0) onEndedRef.current?.()
+      // iPhone may pause a video that gets sound without a tap: go back to
+      // silent playback and let the page ask for a tap.
+      if (state === 2 && !pausedRef.current && Date.now() - unmutedAt.current < 2500) {
+        send('mute'); send('playVideo'); blockedRef.current?.()
       }
       if (data.event === 'onError') onError()
     }
@@ -74,27 +96,33 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoKey])
 
-  useEffect(() => { send(muted ? 'mute' : 'unMute'); if (!muted) send('setVolume', [100]) }, [muted])
+  useEffect(() => { send(muted ? 'mute' : 'unMute'); if (!muted) { send('setVolume', [100]); unmutedAt.current = Date.now() } }, [muted])
   useEffect(() => { send(paused || !onScreen ? 'pauseVideo' : 'playVideo') }, [paused, onScreen])
 
-  const src = `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=1&controls=0&loop=1&playlist=${videoKey}`
-    + `&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&disablekb=1&fs=0&cc_load_policy=0&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`
+  const src = `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=1&controls=0${loop ? `&loop=1&playlist=${videoKey}` : ''}`
+    + `&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&disablekb=1&fs=0&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`
+    + (captions ? '&cc_load_policy=1&cc_lang_pref=en&hl=en' : '&cc_load_policy=0')
+
+  const frameEl = size.w > 0 && (
+    <iframe
+      key={videoKey}
+      ref={frame}
+      src={src}
+      title="Trailer"
+      tabIndex={-1}
+      allow="autoplay; encrypted-media; picture-in-picture"
+      referrerPolicy="strict-origin-when-cross-origin"
+      className="absolute top-1/2 left-1/2 max-w-none -translate-x-1/2 -translate-y-1/2 border-0 transition-opacity duration-700"
+      // fit: a little larger than its 16:9 box, which crops YouTube's edge overlays
+      style={{ width: fit ? size.w * 1.12 : size.w, height: fit ? size.h * 1.12 : size.h, opacity: visible ? 1 : 0 }}
+    />
+  )
 
   return (
     <div ref={box} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-      {size.w > 0 && (
-        <iframe
-          key={videoKey}
-          ref={frame}
-          src={src}
-          title="Trailer"
-          tabIndex={-1}
-          allow="autoplay; encrypted-media; picture-in-picture"
-          referrerPolicy="strict-origin-when-cross-origin"
-          className="absolute top-1/2 left-1/2 max-w-none -translate-x-1/2 -translate-y-1/2 border-0 transition-opacity duration-1000"
-          style={{ width: size.w, height: size.h, opacity: visible ? 1 : 0 }}
-        />
-      )}
+      {fit
+        ? <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 overflow-hidden" style={{ width: size.w, height: size.h }}>{frameEl}</div>
+        : frameEl}
     </div>
   )
 }

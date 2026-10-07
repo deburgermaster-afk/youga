@@ -1,10 +1,11 @@
-import { CalendarDays, GalleryVerticalEnd, House, Plus, Search } from 'lucide-react'
+import { CalendarDays, Clapperboard, GalleryVerticalEnd, House, Plus, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export type Page = 'home' | 'timeline' | 'contributions' | 'search' | 'settings'
+export type Page = 'home' | 'discover' | 'timeline' | 'contributions' | 'search' | 'settings'
 
 const ITEMS = [
   { id: 'home', label: 'Home', icon: House },
+  { id: 'discover', label: 'Reels', icon: Clapperboard },
   { id: 'timeline', label: 'Timeline', icon: GalleryVerticalEnd },
   { id: 'contributions', label: 'Contributions', icon: CalendarDays },
   { id: 'search', label: 'Search', icon: Search },
@@ -20,7 +21,7 @@ export function Dock({ page, onPage, onAdd, badge = 0 }: { page: Page; onPage: (
         {index >= 0 && (
           <span
             aria-hidden
-            className="absolute top-1 bottom-1 left-1 w-[calc((100%-0.5rem)/4)] rounded-full bg-white/[0.13] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_2px_12px_rgba(0,0,0,0.4)] transition-transform duration-300 ease-[cubic-bezier(.3,1.4,.5,1)]"
+            className="absolute top-1 bottom-1 left-1 w-[calc((100%-0.5rem)/5)] rounded-full bg-white/[0.13] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_2px_12px_rgba(0,0,0,0.4)] transition-transform duration-300 ease-[cubic-bezier(.3,1.4,.5,1)]"
             style={{ transform: `translateX(${index * 100}%)` }}
           />
         )}

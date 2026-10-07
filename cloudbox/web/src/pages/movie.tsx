@@ -30,7 +30,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
   onAddFile: (movieId: number) => void
   onChanged: () => void
 }) {
-  const { play, profile, rate, playing, addOrAsk } = useApp()
+  const { play, profile, rate, playing, addOrAsk, sound, setSound } = useApp()
   const [d, setD] = useState<MovieDetail | null>(() => peek.movie(id))
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -39,7 +39,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
   // Trailer: which one, whether it's showing, sound.
   const [ti, setTi] = useState(0)
   const [live, setLive] = useState(false)
-  const [muted, setMuted] = useState(true)
+  const [muted, setMuted] = useState(!sound) // trailers start with sound once it's been turned on
   const entry = library.find(m => m.id === id)
   const isTv = id < 0
   const eps = isTv ? episodeFiles(entry?.files || []) : []
@@ -128,6 +128,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
             paused={playing}
             onPlaying={setLive}
             onError={() => setTi(i => i + 1)}
+            onSoundBlocked={() => setMuted(true)}
           />
         )}
         <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-black/60 to-transparent" />
@@ -136,7 +137,7 @@ export function MoviePage({ id, library, jobs, onClose, onOpen, onAddFile, onCha
           <button onClick={onClose} aria-label="Back" className={onImage}><ArrowLeft className="size-5" /></button>
           <div className="flex gap-2">
             {live && (
-              <button onClick={() => setMuted(m => !m)} aria-label={muted ? 'Unmute trailer' : 'Mute trailer'} className={onImage}>
+              <button onClick={() => { setMuted(m => !m); setSound(muted) }} aria-label={muted ? 'Unmute trailer' : 'Mute trailer'} className={onImage}>
                 {muted ? <VolumeX className="size-[18px]" /> : <Volume2 className="size-[18px]" />}
               </button>
             )}
