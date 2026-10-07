@@ -70,7 +70,6 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
   const [genres, setGenres] = useState<{ id: number; name: string }[]>([])
   const [items, setItems] = useState<ReelItem[]>(feed.items)
   const [active, setActive] = useState(feed.at)
-  const [scrolling, setScrolling] = useState(false)
   const [loading, setLoading] = useState(false)
   const [cc, setCc] = useState(captionsOn)
   const [frame, setFrameState] = useState<Frame>(frameMode)
@@ -79,7 +78,6 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
   const [filters, setFilters] = useState(false)
   const [skip, setSkip] = useState<Record<number, number>>({}) // trailer index per movie after errors
   const scroller = useRef<HTMLDivElement>(null)
-  const settle = useRef<ReturnType<typeof setTimeout>>(undefined)
   const key = `${range}:${genre}`
 
   useEffect(() => { api.genres().then(r => setGenres(r.genres)).catch(() => {}) }, [])
@@ -113,15 +111,21 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
     if (active >= items.length - 8) void more(false)
   }, [active, items, more])
 
+  // The video layer is fixed, so move it with the swipe: it stays glued to
+  // its own reel instead of showing through as the pictures slide past.
+  const layer = useRef<HTMLDivElement>(null)
+  const follow = (index: number) => {
+    const el = scroller.current
+    if (el && layer.current) layer.current.style.transform = `translate3d(0, ${index * el.clientHeight - el.scrollTop}px, 0)`
+  }
   const onScroll = () => {
     const el = scroller.current
     if (!el) return
-    setScrolling(true)
-    clearTimeout(settle.current)
-    settle.current = setTimeout(() => setScrolling(false), 90)
     const i = Math.round(el.scrollTop / el.clientHeight)
+    follow(i)
     if (i !== active) { setActive(i); feed.at = i }
   }
+  useEffect(() => { follow(active) }, [active, frame])
   const next = useCallback(() => {
     const el = scroller.current
     if (el) el.scrollTo({ top: (active + 1) * el.clientHeight, behavior: 'smooth' })
@@ -138,7 +142,7 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
       {cur && <img key={cur.id} src={img(cur.poster, 'w342')} alt="" className="absolute inset-0 size-full scale-125 object-cover opacity-45 blur-2xl" />}
 
       {/* Layer 2: players (the active one visible; the next ones buffered behind it) */}
-      <div className="pointer-events-none absolute inset-0 z-10">
+      <div ref={layer} data-reel-videos className="pointer-events-none absolute inset-0 z-10 will-change-transform">
         <div className={FRAME[frame]}>
           {pool.map(({ m, i }) => {
             const t = m.trailers[skip[m.id] || 0]
@@ -173,7 +177,7 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
         {items.map((m, i) => (
           <section key={m.id} onClick={() => setSound(!sound)} className="relative h-full w-full snap-start snap-always overflow-hidden">
             {i >= active - 1 && i <= active + 4 && (
-              <div className={cn(FRAME[frame], 'overflow-hidden transition-opacity duration-200', i === active && liveId === m.id && !scrolling && 'opacity-0')}>
+              <div className={cn(FRAME[frame], 'overflow-hidden transition-opacity duration-200', i === active && liveId === m.id && 'opacity-0')}>
                 <img src={img(frame === 'full' ? m.poster : m.backdrop || m.poster, 'w780')} alt="" decoding="async" className="size-full object-cover" />
               </div>
             )}
