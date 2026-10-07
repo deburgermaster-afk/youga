@@ -28,7 +28,14 @@ const AHEAD = 3
 const feed: { range: number; genre: number; items: ReelItem[]; page: number; total: number; at: number; key: string; loading?: Promise<void> } =
   { range: 0, genre: 0, items: [], page: 0, total: 1, at: 0, key: '' }
 let captionsOn = false
-let fitOn = false // full-screen 9:16 by default
+// Frame shapes: a tall 4:5 reel (default), the whole screen, or the full 16:9 picture.
+type Frame = 'reel' | 'full' | 'wide'
+let frameMode: Frame = 'reel'
+const FRAME: Record<Frame, string> = {
+  reel: 'absolute inset-x-0 top-[45%] aspect-[4/5] -translate-y-1/2',
+  full: 'absolute inset-0',
+  wide: 'absolute inset-x-0 top-[42%] aspect-video -translate-y-1/2',
+}
 
 async function loadFeed(reset: boolean) {
   if (feed.loading) return feed.loading
@@ -66,7 +73,9 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
   const [scrolling, setScrolling] = useState(false)
   const [loading, setLoading] = useState(false)
   const [cc, setCc] = useState(captionsOn)
-  const [fit, setFit] = useState(fitOn)
+  const [frame, setFrameState] = useState<Frame>(frameMode)
+  const setFrame = (f: Frame) => { frameMode = f; setFrameState(f) }
+  const [liveId, setLiveId] = useState(0) // the active reel's video is on
   const [filters, setFilters] = useState(false)
   const [skip, setSkip] = useState<Record<number, number>>({}) // trailer index per movie after errors
   const scroller = useRef<HTMLDivElement>(null)
@@ -125,61 +134,71 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
 
   return (
     <div className="fixed inset-0 z-20 bg-black">
-      {/* Pictures scroll; videos live in the fixed layer above them */}
-      <div ref={scroller} onScroll={onScroll} className="scrollbar-none h-full snap-y snap-mandatory overflow-y-scroll overscroll-contain">
-        {items.map((m, i) => <ReelPicture key={m.id} m={m} near={i >= active - 1 && i <= active + 4} fit={fit} />)}
+      {/* Layer 1: soft blurred poster of the current reel around the frame */}
+      {cur && <img key={cur.id} src={img(cur.poster, 'w342')} alt="" className="absolute inset-0 size-full scale-125 object-cover opacity-45 blur-2xl" />}
+
+      {/* Layer 2: players (the active one visible; the next ones buffered behind it) */}
+      <div className="pointer-events-none absolute inset-0 z-10">
+        <div className={FRAME[frame]}>
+          {pool.map(({ m, i }) => {
+            const t = m.trailers[skip[m.id] || 0]
+            if (!t) return null
+            const isActive = i === active
+            return (
+              <div key={m.id} className="absolute inset-0" style={{ opacity: isActive ? 1 : 0.011, zIndex: isActive ? 2 : 1 }}>
+                <TrailerBackground
+                  videoKey={t}
+                  muted={!isActive || !sound}
+                  paused={!isActive || playing}
+                  preload
+                  loop={false}
+                  captions={cc}
+                  fit={frame === 'wide'}
+                  zoom={1.02}
+                  revealMs={150}
+                  onPlaying={on => { if (isActive) setLiveId(on ? m.id : 0) }}
+                  onError={() => setSkip(s => ({ ...s, [m.id]: (s[m.id] || 0) + 1 }))}
+                  onEnded={() => { if (isActive) next() }}
+                  onSoundBlocked={() => { if (isActive) setSound(false) }}
+                />
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Layer 3 (on top, so iPhone video can't swallow touches): swipe area,
+          pictures until the video is on, title and buttons */}
+      <div ref={scroller} onScroll={onScroll} className="scrollbar-none relative z-20 h-full snap-y snap-mandatory overflow-y-scroll overscroll-contain [transform:translateZ(0)]">
+        {items.map((m, i) => (
+          <section key={m.id} onClick={() => setSound(!sound)} className="relative h-full w-full snap-start snap-always overflow-hidden">
+            {i >= active - 1 && i <= active + 4 && (
+              <div className={cn(FRAME[frame], 'overflow-hidden transition-opacity duration-200', i === active && liveId === m.id && !scrolling && 'opacity-0')}>
+                <img src={img(frame === 'full' ? m.poster : m.backdrop || m.poster, 'w780')} alt="" decoding="async" className="size-full object-cover" />
+              </div>
+            )}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/80 to-transparent" />
+            <ReelInfo
+              m={m}
+              inVault={library.some(x => x.id === m.id && x.files.length)}
+              onOpen={() => onOpen(m.id)}
+              onAdd={() => void addOrAsk({ id: m.id, title: m.title })}
+            />
+          </section>
+        ))}
         {!items.length && (
           <div className="flex h-full items-center justify-center">{loading ? <Spinner className="size-6" /> : <p className="text-sm text-white/60">Nothing found for these filters.</p>}</div>
         )}
       </div>
 
-      {/* Player layer: the active one shows; the others wait, buffered, behind it */}
-      <div className={cn('pointer-events-none absolute inset-x-0 transition-opacity duration-150', fit ? 'top-[12%] bottom-[38%]' : 'inset-y-0', scrolling && 'opacity-0')}>
-        {pool.map(({ m, i }) => {
-          const t = m.trailers[skip[m.id] || 0]
-          if (!t) return null
-          const isActive = i === active
-          return (
-            <div key={m.id} className="absolute inset-0" style={{ opacity: isActive ? 1 : 0.011, zIndex: isActive ? 2 : 1 }}>
-              <TrailerBackground
-                videoKey={t}
-                muted={!isActive || !sound}
-                paused={!isActive || playing}
-                preload
-                loop={false}
-                captions={cc}
-                fit={fit}
-                revealMs={150}
-                onPlaying={() => {}}
-                onError={() => setSkip(s => ({ ...s, [m.id]: (s[m.id] || 0) + 1 }))}
-                onEnded={() => { if (isActive) next() }}
-                onSoundBlocked={() => { if (isActive) setSound(false) }}
-              />
-            </div>
-          )
-        })}
-      </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/80 to-transparent" />
-
-      {/* Tap the picture for sound */}
-      <button aria-label={sound ? 'Mute' : 'Sound on'} onClick={() => setSound(!sound)} className="absolute inset-x-0 top-[12%] bottom-[22%]" />
       {!sound && (
-        <button onClick={() => setSound(true)} className="btn-black absolute top-1/2 left-1/2 flex h-10 -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full px-4 text-[13px] font-semibold">
+        <button onClick={() => setSound(true)} className="btn-black absolute top-1/2 left-1/2 z-30 flex h-10 -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full px-4 text-[13px] font-semibold">
           <VolumeX className="size-4 text-orange-400" /> Tap for sound
         </button>
       )}
 
-      {cur && (
-        <ReelInfo
-          m={cur}
-          inVault={library.some(x => x.id === cur.id && x.files.length)}
-          onOpen={() => onOpen(cur.id)}
-          onAdd={() => void addOrAsk({ id: cur.id, title: cur.title })}
-        />
-      )}
-
       {/* Just two small corner buttons; the rest is in the Filters sheet */}
-      <div className="absolute top-[max(0.75rem,env(safe-area-inset-top))] right-3 flex gap-2">
+      <div className="absolute top-[max(0.75rem,env(safe-area-inset-top))] right-3 z-30 flex gap-2">
         <button onClick={() => setSound(!sound)} aria-label={sound ? 'Mute' : 'Sound on'} className={round}>
           {sound ? <Volume2 className="size-4" /> : <VolumeX className="size-4 text-white/60" />}
         </button>
@@ -206,7 +225,14 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
           </div>
           <div className="flex flex-wrap gap-1.5">
             <button onClick={() => { captionsOn = !cc; setCc(!cc) }} className={chip(cc)}><Captions className="mr-1 inline size-4" />Subtitles</button>
-            <button onClick={() => { fitOn = !fit; setFit(!fit) }} className={chip(fit)}>Show whole 16:9 picture</button>
+          </div>
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Video size</p>
+            <div className="flex flex-wrap gap-1.5">
+              <button onClick={() => setFrame('reel')} className={chip(frame === 'reel')}>Reel (4:5)</button>
+              <button onClick={() => setFrame('full')} className={chip(frame === 'full')}>Full screen (9:16)</button>
+              <button onClick={() => setFrame('wide')} className={chip(frame === 'wide')}>Whole picture (16:9)</button>
+            </div>
           </div>
           <button onClick={() => setFilters(false)} className="btn-black h-11 w-full rounded-full text-sm font-semibold">Done</button>
         </div>
@@ -215,26 +241,10 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
   )
 }
 
-// One reel's picture: shown under its video, and while swiping.
-function ReelPicture({ m, near, fit }: { m: ReelItem; near: boolean; fit: boolean }) {
-  return (
-    <section className="relative h-full w-full snap-start snap-always overflow-hidden">
-      {near && (fit
-        ? <>
-            <img src={img(m.poster, 'w342')} alt="" className="absolute inset-0 size-full scale-125 object-cover opacity-50 blur-2xl" />
-            <div className="absolute inset-x-0 top-[12%] bottom-[38%]">
-              <img src={img(m.backdrop || m.poster, 'w780')} alt="" decoding="async" className="absolute inset-x-0 top-1/2 aspect-video w-full -translate-y-1/2 object-cover" />
-            </div>
-          </>
-        : <img src={img(m.poster, 'w780')} alt="" decoding="async" className="absolute inset-0 size-full object-cover" />)}
-    </section>
-  )
-}
-
 // Small, out of the way: title + facts, buttons on the right.
 function ReelInfo({ m, inVault, onOpen, onAdd }: { m: ReelItem; inVault: boolean; onOpen: () => void; onAdd: () => void }) {
   return (
-    <div className="absolute inset-x-0 bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4.4rem)] flex items-end gap-2 px-3">
+    <div onClick={e => e.stopPropagation()} className="absolute inset-x-0 bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4.4rem)] flex items-end gap-2 px-3">
       <div className="min-w-0 flex-1">
         <h2 className="truncate font-display text-[16px] leading-tight font-bold tracking-tight drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">{m.title}</h2>
         <p className="flex items-center gap-1.5 truncate text-[11px] text-white/80 drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)]">

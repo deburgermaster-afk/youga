@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 // It stays invisible until it's actually playing, then fades in over the
 // poster, so the YouTube loading screen, title and errors never show.
 // Talks to the embed with YouTube's postMessage protocol (no script needed).
-export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError, onEnded, onSoundBlocked, loop = true, captions = false, fit = false, revealMs = 1200, preload = false }: {
+export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError, onEnded, onSoundBlocked, loop = true, captions = false, fit = false, revealMs = 1200, preload = false, zoom = 1.18 }: {
   videoKey: string
   muted: boolean
   paused: boolean
@@ -17,6 +17,7 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
   fit?: boolean // whole 16:9 picture centred (reels) instead of filling the box
   revealMs?: number // wait before showing it, so YouTube's title overlay is gone
   preload?: boolean // while paused: play silently for a moment to buffer, then rewind and wait
+  zoom?: number // extra zoom when filling the box (crops YouTube's edge overlays)
 }) {
   const box = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLIFrameElement>(null)
@@ -46,7 +47,7 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
     const el = box.current
     if (!el) return
     const ro = new ResizeObserver(() => {
-      const s = (fit ? Math.min(el.clientWidth / 16, el.clientHeight / 9) : Math.max(el.clientWidth / 16, el.clientHeight / 9) * 1.18)
+      const s = (fit ? Math.min(el.clientWidth / 16, el.clientHeight / 9) : Math.max(el.clientWidth / 16, el.clientHeight / 9) * zoom)
       setSize({ w: Math.ceil(16 * s), h: Math.ceil(9 * s) })
     })
     ro.observe(el)
