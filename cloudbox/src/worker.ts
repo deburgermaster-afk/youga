@@ -686,6 +686,15 @@ async function findFreeCopy(env: Env, id: number): Promise<Free> {
   return none
 }
 
+const genreCache: { names?: Record<number, string> } = {}
+async function genreNames(env: Env) {
+  if (!genreCache.names) {
+    const r = await tmdb<{ genres: { id: number; name: string }[] }>(env, '/genre/movie/list')
+    genreCache.names = Object.fromEntries(r.genres.map(g => [g.id, g.name]))
+  }
+  return genreCache.names
+}
+
 // Small facts for search rows (IMDb rating, top cast), cached in R2 and in
 // memory so lists fill in instantly the second time.
 type Meta = { imdbId: string; imdb: number; votes: number; cast: string[]; t: number }
@@ -1173,6 +1182,32 @@ export default {
           ...(genre ? { with_genres: genre } : {}),
         })
         return json({ results: r.results.map(m => lite(m, false)), totalPages: r.total_pages || 1 }, 200, cache(1800))
+      }
+      // Reels feed: the discover list with trailers and genres already filled
+      // in, so the app needs no per-movie lookups while you swipe.
+      if (path === '/api/reels') {
+        const now = new Date().getFullYear()
+        const from = Number(url.searchParams.get('from')) || now - 1
+        const to = Number(url.searchParams.get('to')) || now
+        const days = Number(url.searchParams.get('days')) || 0
+        const genre = url.searchParams.get('genre') || ''
+        const page = Math.min(50, Number(url.searchParams.get('page')) || 1)
+        const today = new Date().toISOString().slice(0, 10)
+        const since = days ? new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10) : `${from}-01-01`
+        const [r, names] = await Promise.all([
+          tmdb<{ results: (TmdbLite & { genre_ids?: number[] })[]; total_pages?: number }>(env, '/discover/movie', {
+            'primary_release_date.gte': since,
+            'primary_release_date.lte': to >= now ? today : `${to}-12-31`,
+            sort_by: 'popularity.desc', 'vote_count.gte': '15', include_adult: 'false', page: String(page),
+            ...(genre ? { with_genres: genre } : {}),
+          }),
+          genreNames(env),
+        ])
+        const items = await Promise.all(r.results.filter(m => m.poster_path).map(async m => {
+          const v = await tmdb<{ results?: Video[] }>(env, `/movie/${m.id}/videos`).catch(() => ({ results: [] as Video[] }))
+          return { ...lite(m, false), genres: (m.genre_ids || []).map(id => names[id]).filter(Boolean), trailers: trailersOf(v.results).map(t => t.key) }
+        }))
+        return json({ results: items.filter(i => i.trailers.length), totalPages: r.total_pages || 1 }, 200, cache(1800))
       }
       if (path === '/api/tmdb/genres') {
         const r = await tmdb<{ genres: { id: number; name: string }[] }>(env, '/genre/movie/list')

@@ -3,7 +3,7 @@ import { Captions, Check, Info, Plus, SlidersHorizontal, Star, Volume2, VolumeX 
 import { Panel } from '@/components/panel'
 import { Spinner } from '@/components/ui/spinner'
 import { TrailerBackground } from '@/components/trailer'
-import { api, img, peek, prefetchTitle, type Movie, type MovieDetail, type MovieLite } from '@/lib/api'
+import { api, img, prefetchTitle, type Movie, type ReelItem } from '@/lib/api'
 import { useApp } from '@/lib/app-context'
 import { cn } from '@/lib/utils'
 
@@ -17,13 +17,15 @@ const RANGES = [
   { label: '2010s', from: 2010, to: 2019 },
   { label: '2000s', from: 2000, to: 2009 },
 ]
-const AHEAD = 10 // trailer info kept ready ahead of the one playing
-const BEHIND = 1 // players kept alive behind it…
-const BUFFER = 2 // …and ahead of it (loaded, paused, ready to go)
+// Players kept alive around the one you're watching. They sit on screen
+// (iPhone won't buffer off-screen video), invisible behind the active one,
+// already buffered and rewound, so a swipe just reveals one that's ready.
+const BEHIND = 1
+const AHEAD = 3
 
-// The feed lives outside React so it survives tab switches and can be
-// filled before the Reels tab is ever opened.
-const feed: { range: number; genre: number; items: MovieLite[]; page: number; total: number; at: number; key: string; loading?: Promise<void> } =
+// The feed lives outside React: it survives tab switches and is filled
+// (trailers included) as soon as the app opens.
+const feed: { range: number; genre: number; items: ReelItem[]; page: number; total: number; at: number; key: string; loading?: Promise<void> } =
   { range: 0, genre: 0, items: [], page: 0, total: 1, at: 0, key: '' }
 let captionsOn = false
 let fitOn = false // full-screen 9:16 by default
@@ -35,23 +37,23 @@ async function loadFeed(reset: boolean) {
   const r = RANGES[feed.range]
   feed.loading = (async () => {
     try {
-      const res = await api.discover({ from: r.from, to: r.to, days: r.days, genre: feed.genre || undefined, page })
-      const fresh = res.results.filter(m => m.poster && m.backdrop)
+      const res = await api.reels({ from: r.from, to: r.to, days: r.days, genre: feed.genre || undefined, page })
       feed.page = page
       feed.total = res.totalPages
       feed.key = `${feed.range}:${feed.genre}`
-      feed.items = reset ? fresh : [...feed.items, ...fresh.filter(m => !feed.items.some(x => x.id === m.id))]
+      feed.items = reset ? res.results : [...feed.items, ...res.results.filter(m => !feed.items.some(x => x.id === m.id))]
     } catch { /* keep what we have */ }
   })()
   await feed.loading
   feed.loading = undefined
 }
 
-// Called when the app opens: newest reels + the first 10 trailers ready.
+const preloadImage = (src: string) => { const i = new Image(); i.decoding = 'async'; i.src = src }
+
+// Called when the app opens: the newest reels with their trailers, and the first pictures.
 export async function warmReels() {
   if (!feed.items.length) await loadFeed(true)
-  feed.items.slice(0, AHEAD).forEach(m => prefetchTitle(m.id))
-  feed.items.slice(0, 3).forEach(m => { const i = new Image(); i.src = img(m.backdrop, 'w780') })
+  feed.items.slice(0, 5).forEach(m => preloadImage(img(m.poster, 'w780')))
 }
 
 export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (id: number) => void }) {
@@ -59,13 +61,16 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
   const [range, setRange] = useState(feed.range)
   const [genre, setGenre] = useState(feed.genre)
   const [genres, setGenres] = useState<{ id: number; name: string }[]>([])
-  const [items, setItems] = useState<MovieLite[]>(feed.items)
+  const [items, setItems] = useState<ReelItem[]>(feed.items)
   const [active, setActive] = useState(feed.at)
+  const [scrolling, setScrolling] = useState(false)
   const [loading, setLoading] = useState(false)
   const [cc, setCc] = useState(captionsOn)
   const [fit, setFit] = useState(fitOn)
   const [filters, setFilters] = useState(false)
+  const [skip, setSkip] = useState<Record<number, number>>({}) // trailer index per movie after errors
   const scroller = useRef<HTMLDivElement>(null)
+  const settle = useRef<ReturnType<typeof setTimeout>>(undefined)
   const key = `${range}:${genre}`
 
   useEffect(() => { api.genres().then(r => setGenres(r.genres)).catch(() => {}) }, [])
@@ -92,16 +97,19 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
     void more(true)
   }, [key, range, genre, more])
 
-  // Keep the next 10 ready; fetch another page before the end.
+  // Pictures for the next few, details for the next ten, next page early.
   useEffect(() => {
-    items.slice(active, active + AHEAD).forEach(m => prefetchTitle(m.id))
-    items.slice(active + 1, active + 4).forEach(m => { const i = new Image(); i.src = img(m.backdrop, 'w780') })
-    if (active >= items.length - AHEAD) void more(false)
+    items.slice(active + 1, active + 6).forEach(m => preloadImage(img(m.poster, 'w780')))
+    items.slice(active, active + 10).forEach(m => prefetchTitle(m.id))
+    if (active >= items.length - 8) void more(false)
   }, [active, items, more])
 
   const onScroll = () => {
     const el = scroller.current
     if (!el) return
+    setScrolling(true)
+    clearTimeout(settle.current)
+    settle.current = setTimeout(() => setScrolling(false), 90)
     const i = Math.round(el.scrollTop / el.clientHeight)
     if (i !== active) { setActive(i); feed.at = i }
   }
@@ -112,35 +120,65 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
 
   const chip = (on: boolean) => cn('h-8 shrink-0 rounded-full px-3.5 text-[13px] font-semibold transition-colors', on ? 'bg-white text-black' : 'glass-dark text-white/85')
   const round = 'glass-dark relative flex size-9 shrink-0 items-center justify-center rounded-full'
+  const pool = items.map((m, i) => ({ m, i })).filter(({ i }) => i >= active - BEHIND && i <= active + AHEAD)
+  const cur = items[active]
 
   return (
     <div className="fixed inset-0 z-20 bg-black">
+      {/* Pictures scroll; videos live in the fixed layer above them */}
       <div ref={scroller} onScroll={onScroll} className="scrollbar-none h-full snap-y snap-mandatory overflow-y-scroll overscroll-contain">
-        {items.map((m, i) => (
-          <Reel
-            key={m.id}
-            m={m}
-            active={i === active}
-            mounted={i >= active - BEHIND && i <= active + BUFFER}
-            near={i >= active - 1 && i <= active + 3}
-            sound={sound}
-            captions={cc}
-            fit={fit}
-            paused={playing}
-            inVault={library.some(x => x.id === m.id && x.files.length)}
-            onToggleSound={() => setSound(!sound)}
-            onSoundBlocked={() => setSound(false)}
-            onEnded={next}
-            onOpen={() => onOpen(m.id)}
-            onAdd={() => void addOrAsk({ id: m.id, title: m.title })}
-          />
-        ))}
+        {items.map((m, i) => <ReelPicture key={m.id} m={m} near={i >= active - 1 && i <= active + 4} fit={fit} />)}
         {!items.length && (
           <div className="flex h-full items-center justify-center">{loading ? <Spinner className="size-6" /> : <p className="text-sm text-white/60">Nothing found for these filters.</p>}</div>
         )}
       </div>
 
-      {/* Just two small corner buttons; everything else is in the Filters sheet */}
+      {/* Player layer: the active one shows; the others wait, buffered, behind it */}
+      <div className={cn('pointer-events-none absolute inset-x-0 transition-opacity duration-150', fit ? 'top-[12%] bottom-[38%]' : 'inset-y-0', scrolling && 'opacity-0')}>
+        {pool.map(({ m, i }) => {
+          const t = m.trailers[skip[m.id] || 0]
+          if (!t) return null
+          const isActive = i === active
+          return (
+            <div key={m.id} className="absolute inset-0" style={{ opacity: isActive ? 1 : 0.011, zIndex: isActive ? 2 : 1 }}>
+              <TrailerBackground
+                videoKey={t}
+                muted={!isActive || !sound}
+                paused={!isActive || playing}
+                preload
+                loop={false}
+                captions={cc}
+                fit={fit}
+                revealMs={150}
+                onPlaying={() => {}}
+                onError={() => setSkip(s => ({ ...s, [m.id]: (s[m.id] || 0) + 1 }))}
+                onEnded={() => { if (isActive) next() }}
+                onSoundBlocked={() => { if (isActive) setSound(false) }}
+              />
+            </div>
+          )
+        })}
+      </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/80 to-transparent" />
+
+      {/* Tap the picture for sound */}
+      <button aria-label={sound ? 'Mute' : 'Sound on'} onClick={() => setSound(!sound)} className="absolute inset-x-0 top-[12%] bottom-[22%]" />
+      {!sound && (
+        <button onClick={() => setSound(true)} className="btn-black absolute top-1/2 left-1/2 flex h-10 -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full px-4 text-[13px] font-semibold">
+          <VolumeX className="size-4 text-orange-400" /> Tap for sound
+        </button>
+      )}
+
+      {cur && (
+        <ReelInfo
+          m={cur}
+          inVault={library.some(x => x.id === cur.id && x.files.length)}
+          onOpen={() => onOpen(cur.id)}
+          onAdd={() => void addOrAsk({ id: cur.id, title: cur.title })}
+        />
+      )}
+
+      {/* Just two small corner buttons; the rest is in the Filters sheet */}
       <div className="absolute top-[max(0.75rem,env(safe-area-inset-top))] right-3 flex gap-2">
         <button onClick={() => setSound(!sound)} aria-label={sound ? 'Mute' : 'Sound on'} className={round}>
           {sound ? <Volume2 className="size-4" /> : <VolumeX className="size-4 text-white/60" />}
@@ -177,96 +215,38 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
   )
 }
 
-function Reel({ m, active, mounted, near, sound, captions, fit, paused, inVault, onToggleSound, onSoundBlocked, onEnded, onOpen, onAdd }: {
-  m: MovieLite
-  active: boolean
-  mounted: boolean // player loaded (playing if active, buffering if not)
-  near: boolean // images loaded
-  sound: boolean
-  captions: boolean
-  fit: boolean
-  paused: boolean
-  inVault: boolean
-  onToggleSound: () => void
-  onSoundBlocked: () => void
-  onEnded: () => void
-  onOpen: () => void
-  onAdd: () => void
-}) {
-  const [d, setD] = useState<MovieDetail | null>(() => peek.movie(m.id))
-  const [ti, setTi] = useState(0)
-  const [live, setLive] = useState(false)
-
-  useEffect(() => {
-    if (!near || d) return
-    let on = true
-    api.movie(m.id).then(x => on && setD(x)).catch(() => {})
-    return () => { on = false }
-  }, [near, d, m.id])
-
-  const trailer = d?.trailers[ti]
-  // No trailer: show the picture for a few seconds, then move on.
-  useEffect(() => {
-    if (!active || !d || trailer) return
-    const t = setTimeout(onEnded, 6000)
-    return () => clearTimeout(t)
-  }, [active, d, trailer, onEnded])
-
+// One reel's picture: shown under its video, and while swiping.
+function ReelPicture({ m, near, fit }: { m: ReelItem; near: boolean; fit: boolean }) {
   return (
     <section className="relative h-full w-full snap-start snap-always overflow-hidden">
       {near && (fit
         ? <>
-            {/* Facebook-style: blurred poster behind a sharp 16:9 picture */}
             <img src={img(m.poster, 'w342')} alt="" className="absolute inset-0 size-full scale-125 object-cover opacity-50 blur-2xl" />
             <div className="absolute inset-x-0 top-[12%] bottom-[38%]">
-              <img src={img(m.backdrop, 'w780')} alt="" decoding="async" className="absolute inset-x-0 top-1/2 aspect-video w-full -translate-y-1/2 object-cover shadow-[0_20px_60px_rgba(0,0,0,0.6)]" />
+              <img src={img(m.backdrop || m.poster, 'w780')} alt="" decoding="async" className="absolute inset-x-0 top-1/2 aspect-video w-full -translate-y-1/2 object-cover" />
             </div>
           </>
         : <img src={img(m.poster, 'w780')} alt="" decoding="async" className="absolute inset-0 size-full object-cover" />)}
-      {mounted && trailer && (
-        <div className={cn('absolute inset-x-0', fit ? 'top-[12%] bottom-[38%]' : 'inset-y-0')}>
-        <TrailerBackground
-          videoKey={trailer.key}
-          muted={!active || !sound}
-          paused={!active || paused}
-          loop={false}
-          captions={captions}
-          fit={fit}
-          revealMs={500}
-          onPlaying={setLive}
-          onError={() => setTi(i => i + 1)}
-          onEnded={() => { if (active) onEnded() }}
-          onSoundBlocked={() => { if (active) onSoundBlocked() }}
-        />
-        </div>
-      )}
-      {!fit && <div className={cn('absolute inset-0 bg-black/20 transition-opacity duration-700', live && 'opacity-0')} />}
-      <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/80 to-transparent" />
-
-      {/* Tap the picture to turn sound on/off */}
-      <button aria-label={sound ? 'Mute' : 'Sound on'} onClick={onToggleSound} className="absolute inset-x-0 top-[12%] bottom-[22%]" />
-      {active && !sound && (
-        <button onClick={onToggleSound} className="btn-black absolute top-1/2 left-1/2 flex h-10 -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full px-4 text-[13px] font-semibold">
-          <VolumeX className="size-4 text-orange-400" /> Tap for sound
-        </button>
-      )}
-
-      {/* Small, out of the way: title + facts, buttons on the right */}
-      <div className="absolute inset-x-0 bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4.4rem)] flex items-end gap-2 px-3">
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate font-display text-[16px] leading-tight font-bold tracking-tight drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">{m.title}</h2>
-          <p className="flex items-center gap-1.5 truncate text-[11px] text-white/80 drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)]">
-            {!!m.rating && <span className="flex items-center gap-0.5 font-semibold text-white"><Star className="size-3 fill-orange-400 text-orange-400" />{m.rating.toFixed(1)}</span>}
-            {d?.imdbRating ? <span className="rounded bg-[#f5c518] px-1 text-[9px] leading-[14px] font-black text-black">IMDb {d.imdbRating.toFixed(1)}</span> : null}
-            {m.year && <span>{m.year}</span>}
-            {d?.genres.length ? <span className="truncate">{d.genres.slice(0, 2).join(' · ')}</span> : null}
-          </p>
-        </div>
-        <button onClick={onOpen} aria-label="Details" className="glass-dark flex size-8 shrink-0 items-center justify-center rounded-full"><Info className="size-4" /></button>
-        <button onClick={onAdd} aria-label={inVault ? 'In vault' : 'Add'} className="glass-dark flex size-8 shrink-0 items-center justify-center rounded-full">
-          {inVault ? <Check className="size-4 text-emerald-400" /> : <Plus className="size-4 text-orange-400" />}
-        </button>
-      </div>
     </section>
+  )
+}
+
+// Small, out of the way: title + facts, buttons on the right.
+function ReelInfo({ m, inVault, onOpen, onAdd }: { m: ReelItem; inVault: boolean; onOpen: () => void; onAdd: () => void }) {
+  return (
+    <div className="absolute inset-x-0 bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4.4rem)] flex items-end gap-2 px-3">
+      <div className="min-w-0 flex-1">
+        <h2 className="truncate font-display text-[16px] leading-tight font-bold tracking-tight drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">{m.title}</h2>
+        <p className="flex items-center gap-1.5 truncate text-[11px] text-white/80 drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)]">
+          {!!m.rating && <span className="flex items-center gap-0.5 font-semibold text-white"><Star className="size-3 fill-orange-400 text-orange-400" />{m.rating.toFixed(1)}</span>}
+          {m.year && <span>{m.year}</span>}
+          {m.genres.length ? <span className="truncate">{m.genres.slice(0, 2).join(' · ')}</span> : null}
+        </p>
+      </div>
+      <button onClick={onOpen} aria-label="Details" className="glass-dark flex size-8 shrink-0 items-center justify-center rounded-full"><Info className="size-4" /></button>
+      <button onClick={onAdd} aria-label={inVault ? 'In vault' : 'Add'} className="glass-dark flex size-8 shrink-0 items-center justify-center rounded-full">
+        {inVault ? <Check className="size-4 text-emerald-400" /> : <Plus className="size-4 text-orange-400" />}
+      </button>
+    </div>
   )
 }

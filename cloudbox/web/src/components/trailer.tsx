@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 // It stays invisible until it's actually playing, then fades in over the
 // poster, so the YouTube loading screen, title and errors never show.
 // Talks to the embed with YouTube's postMessage protocol (no script needed).
-export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError, onEnded, onSoundBlocked, loop = true, captions = false, fit = false, revealMs = 1200 }: {
+export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError, onEnded, onSoundBlocked, loop = true, captions = false, fit = false, revealMs = 1200, preload = false }: {
   videoKey: string
   muted: boolean
   paused: boolean
@@ -16,6 +16,7 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
   captions?: boolean // YouTube subtitles on
   fit?: boolean // whole 16:9 picture centred (reels) instead of filling the box
   revealMs?: number // wait before showing it, so YouTube's title overlay is gone
+  preload?: boolean // while paused: play silently for a moment to buffer, then rewind and wait
 }) {
   const box = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLIFrameElement>(null)
@@ -32,6 +33,7 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
   pausedRef.current = paused
   const onScreenRef = useRef(true)
   const unmutedAt = useRef(0)
+  const buffered = useRef(false) // played a bit while waiting (needs a rewind)
 
   const ready = useRef(false)
   // Commands only once the player has answered; earlier ones make it throw.
@@ -57,6 +59,7 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
     setVisible(false)
     onPlaying(false)
     ready.current = false
+    buffered.current = false
     let heard = false
     let reveal: ReturnType<typeof setTimeout> | undefined
     const onMsg = (e: MessageEvent) => {
@@ -68,10 +71,14 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
         ready.current = true
         send('addEventListener', ['onStateChange'])
         send('addEventListener', ['onError'])
-        // Preloaded in the background: buffer, then wait until it's on screen.
-        if (pausedRef.current || !onScreenRef.current) send('pauseVideo')
+        // Waiting in the background: either just wait, or (preload) buffer first.
+        if ((pausedRef.current && !preload) || !onScreenRef.current) send('pauseVideo')
       }
       const state = data.event === 'onStateChange' ? data.info : data.event === 'infoDelivery' ? (data.info as { playerState?: number })?.playerState : undefined
+      if (state === 1 && preload && pausedRef.current && !buffered.current) {
+        buffered.current = true
+        setTimeout(() => { if (pausedRef.current) { send('pauseVideo'); send('seekTo', [0, true]) } }, 1800)
+      }
       if (state === 1 && !reveal && !pausedRef.current) {
         if (!mutedRef.current) { send('unMute'); unmutedAt.current = Date.now() } // a new trailer starts muted
         // Wait a beat so YouTube's opening title overlay is gone.
@@ -97,7 +104,11 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
   }, [videoKey])
 
   useEffect(() => { send(muted ? 'mute' : 'unMute'); if (!muted) { send('setVolume', [100]); unmutedAt.current = Date.now() } }, [muted])
-  useEffect(() => { send(paused || !onScreen ? 'pauseVideo' : 'playVideo') }, [paused, onScreen])
+  useEffect(() => {
+    if (paused || !onScreen) return send('pauseVideo')
+    if (buffered.current) { send('seekTo', [0, true]); buffered.current = false } // start from the top
+    send('playVideo')
+  }, [paused, onScreen])
 
   const src = `https://www.youtube-nocookie.com/embed/${videoKey}?autoplay=1&mute=1&controls=0${loop ? `&loop=1&playlist=${videoKey}` : ''}`
     + `&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&disablekb=1&fs=0&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`

@@ -44,6 +44,7 @@ export type MovieDetail = MovieLite & {
   imdbRating?: number; imdbVotes?: number
 }
 export type FreeItem = { id: number; title: string; year: string; poster: string; backdrop: string; rating: number; why?: string; source?: string; addedAt: number }
+export type ReelItem = MovieLite & { genres: string[]; trailers: string[] }
 export type Meta = { imdbId: string; imdb: number; votes: number; cast: string[] }
 // 'archive' = a free, legal copy streamed from the Internet Archive.
 export type MovieFile = { source: 'torbox' | 'cloud' | 'archive'; torrentId?: number; fileId?: number; key?: string; url?: string; name: string; size: number }
@@ -123,6 +124,9 @@ export const api = {
     req<{ results: MovieLite[]; totalPages: number }>(`/api/tmdb/discover?from=${o.from}&to=${o.to}&page=${o.page}${o.genre ? `&genre=${o.genre}` : ''}${o.days ? `&days=${o.days}` : ''}`)
       .then(r => { seed(r.results); return r }),
   genres: () => req<{ genres: { id: number; name: string }[] }>('/api/tmdb/genres'),
+  reels: (o: { from: number; to: number; genre?: number; page: number; days?: number }) =>
+    req<{ results: ReelItem[]; totalPages: number }>(`/api/reels?from=${o.from}&to=${o.to}&page=${o.page}${o.genre ? `&genre=${o.genre}` : ''}${o.days ? `&days=${o.days}` : ''}`)
+      .then(r => { seed(r.results); return r }),
   trending: () => req<{ results: MovieLite[] }>('/api/tmdb/trending')
     .then(r => { trendingList = r.results; seed(r.results); return r }),
   // Title pages are fetched once and kept, so opening one again (or after a prefetch) is instant.
