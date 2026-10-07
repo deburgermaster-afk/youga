@@ -28,6 +28,11 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
   mutedRef.current = muted
   const onEndedRef = useRef(onEnded)
   onEndedRef.current = onEnded
+  // Latest callbacks: a preloaded player was created before it became the active one.
+  const onPlayingRef = useRef(onPlaying)
+  onPlayingRef.current = onPlaying
+  const onErrorRef = useRef(onError)
+  onErrorRef.current = onError
   const blockedRef = useRef(onSoundBlocked)
   blockedRef.current = onSoundBlocked
   const pausedRef = useRef(paused)
@@ -58,7 +63,7 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
 
   useEffect(() => {
     setVisible(false)
-    onPlaying(false)
+    onPlayingRef.current(false)
     ready.current = false
     buffered.current = false
     let heard = false
@@ -83,7 +88,7 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
       if (state === 1 && !reveal && !pausedRef.current) {
         if (!mutedRef.current) { send('unMute'); unmutedAt.current = Date.now() } // a new trailer starts muted
         // Wait a beat so YouTube's opening title overlay is gone.
-        reveal = setTimeout(() => { setVisible(true); onPlaying(true) }, revealMs)
+        reveal = setTimeout(() => { setVisible(true); onPlayingRef.current(true) }, revealMs)
       }
       if (state === 0) onEndedRef.current?.()
       // iPhone may pause a video that gets sound without a tap: go back to
@@ -91,7 +96,7 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
       if (state === 2 && !pausedRef.current && Date.now() - unmutedAt.current < 2500) {
         send('mute'); send('playVideo'); blockedRef.current?.()
       }
-      if (data.event === 'onError') onError()
+      if (data.event === 'onError') onErrorRef.current()
     }
     window.addEventListener('message', onMsg)
     // Handshake until the player answers.
