@@ -74,7 +74,7 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
   const [cc, setCc] = useState(captionsOn)
   const [frame, setFrameState] = useState<Frame>(frameMode)
   const setFrame = (f: Frame) => { frameMode = f; setFrameState(f) }
-  const [liveId, setLiveId] = useState(0) // the active reel's video is on
+  const [live, setLive] = useState<Record<number, boolean>>({}) // which reels' videos are showing
   const [filters, setFilters] = useState(false)
   const [skip, setSkip] = useState<Record<number, number>>({}) // trailer index per movie after errors
   const scroller = useRef<HTMLDivElement>(null)
@@ -160,7 +160,7 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
                   fit={frame === 'wide'}
                   zoom={1.02}
                   revealMs={150}
-                  onPlaying={on => { if (isActive) setLiveId(on ? m.id : 0) }}
+                  onPlaying={on => setLive(l => (l[m.id] === on ? l : { ...l, [m.id]: on }))}
                   onError={() => setSkip(s => ({ ...s, [m.id]: (s[m.id] || 0) + 1 }))}
                   onEnded={() => { if (isActive) next() }}
                   onSoundBlocked={() => { if (isActive) setSound(false) }}
@@ -177,7 +177,7 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
         {items.map((m, i) => (
           <section key={m.id} onClick={() => setSound(!sound)} className="relative h-full w-full snap-start snap-always overflow-hidden">
             {i >= active - 1 && i <= active + 4 && (
-              <div className={cn(FRAME[frame], 'overflow-hidden transition-opacity duration-200', i === active && liveId === m.id && 'opacity-0')}>
+              <div className={cn(FRAME[frame], 'overflow-hidden transition-opacity duration-200', i === active && live[m.id] && 'opacity-0')}>
                 <img src={img(frame === 'full' ? m.poster : m.backdrop || m.poster, 'w780')} alt="" decoding="async" className="size-full object-cover" />
               </div>
             )}

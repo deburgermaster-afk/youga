@@ -40,6 +40,7 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
   const onScreenRef = useRef(true)
   const unmutedAt = useRef(0)
   const buffered = useRef(false) // played a bit while waiting (needs a rewind)
+  const lastTime = useRef(-1)
 
   const ready = useRef(false)
   // Commands only once the player has answered; earlier ones make it throw.
@@ -81,6 +82,13 @@ export function TrailerBackground({ videoKey, muted, paused, onPlaying, onError,
         if ((pausedRef.current && !preload) || !onScreenRef.current) send('pauseVideo')
       }
       const state = data.event === 'onStateChange' ? data.info : data.event === 'infoDelivery' ? (data.info as { playerState?: number })?.playerState : undefined
+      // Backup: time moving forward while we want it playing means it's playing
+      // (some phones don't repeat the "playing" message after a background buffer).
+      const time = data.event === 'infoDelivery' ? (data.info as { currentTime?: number })?.currentTime : undefined
+      if (time !== undefined && !pausedRef.current && !reveal && time > lastTime.current + 0.2 && lastTime.current >= 0) {
+        reveal = setTimeout(() => { setVisible(true); onPlayingRef.current(true) }, revealMs)
+      }
+      if (time !== undefined) lastTime.current = pausedRef.current ? -1 : time
       if (state === 1 && preload && pausedRef.current && !buffered.current) {
         buffered.current = true
         setTimeout(() => { if (pausedRef.current) { send('pauseVideo'); send('seekTo', [0, true]) } }, 1800)
