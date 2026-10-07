@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Captions, CaptionsOff, Check, Info, Maximize2, Minimize2, Plus, Star, Volume2, VolumeX } from 'lucide-react'
+import { Captions, Check, Info, Plus, SlidersHorizontal, Star, Volume2, VolumeX } from 'lucide-react'
+import { Panel } from '@/components/panel'
 import { Spinner } from '@/components/ui/spinner'
 import { TrailerBackground } from '@/components/trailer'
 import { api, img, peek, prefetchTitle, type Movie, type MovieDetail, type MovieLite } from '@/lib/api'
@@ -25,7 +26,7 @@ const BUFFER = 2 // …and ahead of it (loaded, paused, ready to go)
 const feed: { range: number; genre: number; items: MovieLite[]; page: number; total: number; at: number; key: string; loading?: Promise<void> } =
   { range: 0, genre: 0, items: [], page: 0, total: 1, at: 0, key: '' }
 let captionsOn = false
-let fitOn = true
+let fitOn = false // full-screen 9:16 by default
 
 async function loadFeed(reset: boolean) {
   if (feed.loading) return feed.loading
@@ -63,6 +64,7 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
   const [loading, setLoading] = useState(false)
   const [cc, setCc] = useState(captionsOn)
   const [fit, setFit] = useState(fitOn)
+  const [filters, setFilters] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   const key = `${range}:${genre}`
 
@@ -109,7 +111,7 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
   }, [active])
 
   const chip = (on: boolean) => cn('h-8 shrink-0 rounded-full px-3.5 text-[13px] font-semibold transition-colors', on ? 'bg-white text-black' : 'glass-dark text-white/85')
-  const round = 'glass-dark flex size-9 shrink-0 items-center justify-center rounded-full'
+  const round = 'glass-dark relative flex size-9 shrink-0 items-center justify-center rounded-full'
 
   return (
     <div className="fixed inset-0 z-20 bg-black">
@@ -138,30 +140,39 @@ export function DiscoverPage({ library, onOpen }: { library: Movie[]; onOpen: (i
         )}
       </div>
 
-      {/* Filters and switches over the video */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 via-black/35 to-transparent pt-[max(0.75rem,env(safe-area-inset-top))] pb-8">
-        <div className="pointer-events-auto flex items-center gap-2 px-3">
-          <span className="font-display text-xl font-extrabold tracking-tight">Reels</span>
-          <div className="scrollbar-none flex flex-1 gap-1.5 overflow-x-auto">
-            {RANGES.map((r, i) => <button key={r.label} onClick={() => setRange(i)} className={chip(i === range)}>{r.label}</button>)}
-          </div>
-        </div>
-        <div className="pointer-events-auto mt-2 flex items-center gap-2 px-3">
-          <div className="scrollbar-none flex flex-1 gap-1.5 overflow-x-auto">
-            <button onClick={() => setGenre(0)} className={chip(genre === 0)}>All</button>
-            {genres.map(g => <button key={g.id} onClick={() => setGenre(g.id)} className={chip(genre === g.id)}>{g.name}</button>)}
-          </div>
-          <button onClick={() => { fitOn = !fit; setFit(!fit) }} aria-label={fit ? 'Fill the screen' : 'Show whole picture'} className={round}>
-            {fit ? <Maximize2 className="size-4" /> : <Minimize2 className="size-4" />}
-          </button>
-          <button onClick={() => { captionsOn = !cc; setCc(!cc) }} aria-label={cc ? 'Subtitles off' : 'Subtitles on'} className={round}>
-            {cc ? <Captions className="size-4 text-orange-300" /> : <CaptionsOff className="size-4 text-white/60" />}
-          </button>
-          <button onClick={() => setSound(!sound)} aria-label={sound ? 'Mute' : 'Sound on'} className={round}>
-            {sound ? <Volume2 className="size-4" /> : <VolumeX className="size-4 text-white/60" />}
-          </button>
-        </div>
+      {/* Just two small corner buttons; everything else is in the Filters sheet */}
+      <div className="absolute top-[max(0.75rem,env(safe-area-inset-top))] right-3 flex gap-2">
+        <button onClick={() => setSound(!sound)} aria-label={sound ? 'Mute' : 'Sound on'} className={round}>
+          {sound ? <Volume2 className="size-4" /> : <VolumeX className="size-4 text-white/60" />}
+        </button>
+        <button onClick={() => setFilters(true)} aria-label="Filters" className={round}>
+          <SlidersHorizontal className="size-4" />
+          {(range !== 0 || genre !== 0) && <span className="absolute top-0.5 right-0.5 size-2 rounded-full bg-orange-500" />}
+        </button>
       </div>
+
+      <Panel open={filters} onOpenChange={setFilters} title="Reels filters">
+        <div className="space-y-5">
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Released</p>
+            <div className="flex flex-wrap gap-1.5">
+              {RANGES.map((r, i) => <button key={r.label} onClick={() => setRange(i)} className={chip(i === range)}>{r.label}</button>)}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Genre</p>
+            <div className="flex flex-wrap gap-1.5">
+              <button onClick={() => setGenre(0)} className={chip(genre === 0)}>All</button>
+              {genres.map(g => <button key={g.id} onClick={() => setGenre(g.id)} className={chip(genre === g.id)}>{g.name}</button>)}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => { captionsOn = !cc; setCc(!cc) }} className={chip(cc)}><Captions className="mr-1 inline size-4" />Subtitles</button>
+            <button onClick={() => { fitOn = !fit; setFit(!fit) }} className={chip(fit)}>Show whole 16:9 picture</button>
+          </div>
+          <button onClick={() => setFilters(false)} className="btn-black h-11 w-full rounded-full text-sm font-semibold">Done</button>
+        </div>
+      </Panel>
     </div>
   )
 }
@@ -230,31 +241,31 @@ function Reel({ m, active, mounted, near, sound, captions, fit, paused, inVault,
         </div>
       )}
       {!fit && <div className={cn('absolute inset-0 bg-black/20 transition-opacity duration-700', live && 'opacity-0')} />}
-      <div className="absolute inset-x-0 bottom-0 h-[45%] bg-gradient-to-t from-black via-black/70 to-transparent" />
+      <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/80 to-transparent" />
 
       {/* Tap the picture to turn sound on/off */}
-      <button aria-label={sound ? 'Mute' : 'Sound on'} onClick={onToggleSound} className="absolute inset-x-0 top-[22%] bottom-[38%]" />
+      <button aria-label={sound ? 'Mute' : 'Sound on'} onClick={onToggleSound} className="absolute inset-x-0 top-[12%] bottom-[22%]" />
       {active && !sound && (
-        <button onClick={onToggleSound} className="btn-black absolute top-[37%] left-1/2 flex h-10 -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full px-4 text-[13px] font-semibold">
+        <button onClick={onToggleSound} className="btn-black absolute top-1/2 left-1/2 flex h-10 -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full px-4 text-[13px] font-semibold">
           <VolumeX className="size-4 text-orange-400" /> Tap for sound
         </button>
       )}
 
-      <div className="absolute inset-x-0 bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4.75rem)] space-y-2 px-4">
-        <h2 className="font-display text-[28px] leading-[1.02] font-extrabold tracking-[-0.035em] text-balance drop-shadow-lg">{m.title}</h2>
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-white/75">
-          {!!m.rating && <span className="flex items-center gap-1 font-semibold text-white"><Star className="size-3.5 fill-orange-400 text-orange-400" />{m.rating.toFixed(1)}</span>}
-          {d?.imdbRating ? <span className="rounded bg-[#f5c518] px-1 text-[10px] leading-4 font-black text-black">IMDb {d.imdbRating.toFixed(1)}</span> : null}
-          {m.year && <span>{m.year}</span>}
-          {d?.genres.length ? <span className="truncate">{d.genres.slice(0, 3).join(' · ')}</span> : null}
-        </p>
-        {m.overview && <p className="line-clamp-2 max-w-xl text-[13px] leading-snug text-white/70">{m.overview}</p>}
-        <div className="flex gap-2 pt-1">
-          <button onClick={onOpen} className="btn-black flex h-10 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold"><Info className="size-4" /> Details</button>
-          <button onClick={onAdd} className="btn-black flex h-10 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold">
-            {inVault ? <><Check className="size-4 text-emerald-400" /> In vault</> : <><Plus className="size-4 text-orange-400" /> Add</>}
-          </button>
+      {/* Small, out of the way: title + facts, buttons on the right */}
+      <div className="absolute inset-x-0 bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4.4rem)] flex items-end gap-2 px-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate font-display text-[16px] leading-tight font-bold tracking-tight drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">{m.title}</h2>
+          <p className="flex items-center gap-1.5 truncate text-[11px] text-white/80 drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)]">
+            {!!m.rating && <span className="flex items-center gap-0.5 font-semibold text-white"><Star className="size-3 fill-orange-400 text-orange-400" />{m.rating.toFixed(1)}</span>}
+            {d?.imdbRating ? <span className="rounded bg-[#f5c518] px-1 text-[9px] leading-[14px] font-black text-black">IMDb {d.imdbRating.toFixed(1)}</span> : null}
+            {m.year && <span>{m.year}</span>}
+            {d?.genres.length ? <span className="truncate">{d.genres.slice(0, 2).join(' · ')}</span> : null}
+          </p>
         </div>
+        <button onClick={onOpen} aria-label="Details" className="glass-dark flex size-8 shrink-0 items-center justify-center rounded-full"><Info className="size-4" /></button>
+        <button onClick={onAdd} aria-label={inVault ? 'In vault' : 'Add'} className="glass-dark flex size-8 shrink-0 items-center justify-center rounded-full">
+          {inVault ? <Check className="size-4 text-emerald-400" /> : <Plus className="size-4 text-orange-400" />}
+        </button>
       </div>
     </section>
   )
